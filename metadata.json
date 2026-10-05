@@ -1,0 +1,8 @@
+{
+  "name": "Remix Remix Bel Sekolah Otomatis SD Qur\u0027an Unggulan",
+  "description": "Sistem Bel Sekolah Otomatis Full Color dengan Text-to-Speech khusus SD QUR\u0027AN UNGGULAN, chime nada bel, sinkronisasi waktu presisi API, dan editor jadwal interaktif.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
