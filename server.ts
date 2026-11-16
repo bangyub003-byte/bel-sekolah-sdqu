@@ -76,23 +76,49 @@ async function startServer() {
       });
 
       const languageInstructions: Record<"ar" | "en" | "jv", string> = {
-        ar: "Terjemahkan pengumuman bel sekolah berikut ke Bahasa Arab Fusha yang fasih, alami, dan sopan untuk siswa sekolah Islam. WAJIB sertakan harakat/tasykil lengkap (التشكيل الكامل) pada seluruh kata agar pembaca suara AI dapat melafalkannya dengan sangat tepat. Balas HANYA hasil terjemahan bahasa Arabnya saja tanpa penjelasan atau tanda kutip.",
-        en: "Terjemahkan pengumuman bel sekolah berikut ke Bahasa Inggris yang jelas, ramah, dan resmi untuk pengumuman sekolah. Balas HANYA hasil terjemahan bahasa Inggrisnya saja tanpa penjelasan atau tanda kutip.",
-        jv: "Terjemahkan pengumuman bel sekolah berikut ke Bahasa Jawa Krama Inggil / Krama Alus yang sopan, halus, dan alami untuk pengumuman siswa di sekolah Islam (gunakan ejaan alfabet Latin standar bahasa Jawa yang mudah dibaca jelas oleh pelafal suara). Balas HANYA hasil terjemahan bahasa Jawanya saja tanpa penjelasan atau tanda kutip.",
+        ar: "You are a strict translator. Translate the following Indonesian school bell announcement into fluent, polite Modern Standard Arabic (Fusha) for Islamic elementary school students. ALWAYS output ONLY the Arabic translation with full harakat/tasykil (التشكيل الكامل), never keep Indonesian words, and include no quotes or explanations.",
+        en: "You are a strict translator. Translate the following Indonesian school bell announcement into clear, warm, formal English for an elementary school PA announcement. Even if the input is short or includes school names (e.g. 'SD Qur'an Unggulan' or 'Tahfidzul Qur'an'), translate the announcement sentences completely into natural English. Output ONLY the English translation, with no Indonesian words, no quotes, and no explanations.",
+        jv: "You are a strict translator. Translate the following Indonesian school bell announcement into polite Javanese (Bahasa Jawa Krama Inggil / Krama Alus) using clear standard Latin spelling. Output ONLY the Javanese translation with no quotes or explanations.",
       };
 
-      const response = await ai.models.generateContent({
-        model: "gemini-4-hydrogen",
-        contents: text.trim(),
-        config: {
-          systemInstruction: languageInstructions[lang],
-          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-        },
-      });
+      let translatedText = "";
+      let lastTranslateErr: any = null;
 
-      const translatedText = (response.text || "").trim().replace(/^["']|["']$/g, "");
+      // Try primary model gemini-4-hydrogen, then fallback to gemini-3.1-flash-lite on spike/503/timeout
+      const translateAttempts: Array<{ model: string; thinkingLevel: ThinkingLevel }> = [
+        { model: "gemini-4-hydrogen", thinkingLevel: ThinkingLevel.LOW },
+        { model: "gemini-3.1-flash-lite", thinkingLevel: ThinkingLevel.MINIMAL },
+      ];
+
+      for (const attempt of translateAttempts) {
+        try {
+          const translatePromise = ai.models.generateContent({
+            model: attempt.model,
+            contents: text.trim(),
+            config: {
+              systemInstruction: languageInstructions[lang],
+              thinkingConfig: { thinkingLevel: attempt.thinkingLevel },
+            },
+          });
+
+          const timeoutPromise = new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("Translation timeout")), 10000)
+          );
+
+          const response = await Promise.race([translatePromise, timeoutPromise]);
+          const candidate = (response.text || "").trim().replace(/^["']|["']$/g, "");
+          if (candidate) {
+            translatedText = candidate;
+            break;
+          }
+        } catch (err: any) {
+          lastTranslateErr = err;
+          console.warn(`[Translate] ${attempt.model} fallback trigger:`, (err?.message || "").slice(0, 100));
+        }
+      }
+
       if (!translatedText) {
-        throw new Error("AI tidak mengembalikan teks terjemahan.");
+        throw lastTranslateErr || new Error("AI tidak mengembalikan teks terjemahan.");
       }
 
       globalTranslateCache.set(cacheKey, translatedText);
@@ -110,7 +136,7 @@ async function startServer() {
   // AI Voice Cloning & TTS Generation Endpoint using Gemini API
   app.post("/api/voice/clone-tts", async (req, res) => {
     try {
-      const { text, sampleAudioDataUrl, voiceName, voiceDescription, language } = req.body;
+      const { text, voiceName, language } = req.body;
       if (!text || typeof text !== "string") {
         return res.status(400).json({ error: "Text parameter is required" });
       }
@@ -131,9 +157,10 @@ async function startServer() {
         }
       });
 
-      // Prebuilt voices valid for gemini-3.8-flash-lite-tts: 'Kore', 'Puck', 'Fenrir', 'Zephyr', 'Charon'
+      // Prebuilt voices valid for gemini-3.8-flash-lite-tts: 'Fenrir', 'Charon', 'Puck', 'Kore', 'Zephyr'
       const validVoices = ['Kore', 'Puck', 'Fenrir', 'Zephyr', 'Charon'];
       const selectedVoice = voiceName && validVoices.includes(voiceName) ? voiceName : 'Fenrir';
+      const isFemaleVoice = selectedVoice === 'Kore' || selectedVoice === 'Zephyr';
       const targetLang = language === 'ar' || language === 'en' || language === 'jv' ? language : 'id';
 
       // Check server memory cache for instant response (under 5ms)
@@ -146,44 +173,54 @@ async function startServer() {
         });
       }
 
+      const genderDesc = isFemaleVoice ? "warm female" : "authoritative, deep, warm adult male";
       const styleMap: Record<string, string> = {
-        ar: "Clear, authoritative, warm male school announcer speaking fluent Standard Arabic with crisp articulation.",
-        en: "Clear, warm, authoritative male school announcer speaking fluent English.",
-        jv: "Clear, polite, warm male school announcer speaking fluent polite Javanese (Bahasa Jawa Krama) with natural Javanese pronunciation.",
-        id: "Clear, warm, authoritative male school announcer speaking fluent Indonesian.",
+        ar: `Clear, ${genderDesc} school announcer speaking fluent Standard Arabic with crisp articulation.`,
+        en: `Clear, ${genderDesc} school announcer speaking fluent natural English.`,
+        jv: `Clear, polite, ${genderDesc} school announcer speaking fluent Javanese (Bahasa Jawa Krama) with natural pronunciation.`,
+        id: `Clear, ${genderDesc} Indonesian school announcer speaking fluent natural Indonesian.`,
       };
 
-      // Fast studio-quality TTS generation with gemini-3.8-flash-lite-tts
-      const ttsPromise = ai.models.generateContent({
-        model: 'gemini-3.8-flash-lite-tts',
-        contents: [
-          {
-            role: 'user',
-            parts: [
-              {
-                text: text.trim(),
-                speechMetadata: {
-                  style: styleMap[targetLang] || styleMap.id,
+      // Fast studio-quality TTS generation with gemini-3.8-flash-lite-tts, falling back to gemini-3.8-flash-tts on quota/transient error
+      const runTtsRequest = async (modelName: string) => {
+        const ttsPromise = ai.models.generateContent({
+          model: modelName,
+          contents: [
+            {
+              role: 'user',
+              parts: [
+                {
+                  text: text.trim(),
+                  speechMetadata: {
+                    style: styleMap[targetLang] || styleMap.id,
+                  },
                 },
+              ],
+            },
+          ],
+          config: {
+            responseModalities: ['AUDIO'],
+            speechConfig: {
+              voiceConfig: {
+                prebuiltVoiceConfig: { voiceName: selectedVoice },
               },
-            ],
-          },
-        ],
-        config: {
-          responseModalities: ['AUDIO'],
-          speechConfig: {
-            voiceConfig: {
-              prebuiltVoiceConfig: { voiceName: selectedVoice },
             },
           },
-        },
-      });
+        });
 
-      const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("Gemini TTS request timeout (8s)")), 8000)
-      );
+        const timeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("Gemini TTS request timeout (13s)")), 13000)
+        );
 
-      const response = await Promise.race([ttsPromise, timeoutPromise]);
+        return Promise.race([ttsPromise, timeoutPromise]);
+      };
+
+      let response: any;
+      try {
+        response = await runTtsRequest('gemini-3.8-flash-lite-tts');
+      } catch (_firstErr: any) {
+        response = await runTtsRequest('gemini-3.8-flash-tts');
+      }
 
       const candidates = response.candidates;
       if (!candidates || candidates.length === 0) {

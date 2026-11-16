@@ -40,7 +40,7 @@ export const AudioCloningManager: React.FC<AudioCloningManagerProps> = ({
   const [profileDesc, setProfileDesc] = useState('');
   const [sampleAudioUrl, setSampleAudioUrl] = useState<string | undefined>(undefined);
   const [sampleAudioName, setSampleAudioName] = useState<string | undefined>(undefined);
-  const [fallbackVoice, setFallbackVoice] = useState<'Kore' | 'Puck' | 'Fenrir' | 'Zephyr' | 'Charon'>('Kore');
+  const [fallbackVoice, setFallbackVoice] = useState<'Kore' | 'Puck' | 'Fenrir' | 'Zephyr' | 'Charon'>('Fenrir');
 
   const [playbackMode, setPlaybackMode] = useState<'direct_recording' | 'ai_synthesis'>('ai_synthesis');
 
@@ -83,6 +83,7 @@ export const AudioCloningManager: React.FC<AudioCloningManagerProps> = ({
     setProfileDesc('');
     setSampleAudioUrl(undefined);
     setSampleAudioName(undefined);
+    setFallbackVoice('Fenrir');
     setPlaybackMode('ai_synthesis');
     setIsModalOpen(false);
   };
@@ -141,17 +142,17 @@ export const AudioCloningManager: React.FC<AudioCloningManagerProps> = ({
       const audioUrl = await generateClonedTTSAudio(
         testText,
         profile.sampleAudioUrl,
-        profile.prebuiltVoiceFallback || 'Kore',
+        profile.prebuiltVoiceFallback || 'Fenrir',
         profile.name || 'Uji coba suara'
       );
 
       if (audioUrl) {
         await playCustomAudio(audioUrl, settings.volume || 1.0);
       } else {
-        await speakTTS(testText, { ...settings, enableTTS: true }, profile.prebuiltVoiceFallback || 'Kore', true);
+        await speakTTS(testText, { ...settings, enableTTS: true }, profile.prebuiltVoiceFallback || 'Fenrir', true);
       }
     } catch (_err) {
-      await speakTTS(testText, { ...settings, enableTTS: true }, profile.prebuiltVoiceFallback || 'Kore', true);
+      await speakTTS(testText, { ...settings, enableTTS: true }, profile.prebuiltVoiceFallback || 'Fenrir', true);
     } finally {
       setIsTesting(false);
     }
@@ -387,7 +388,7 @@ export const AudioCloningManager: React.FC<AudioCloningManagerProps> = ({
                         ) : (
                           <>
                             <Sparkles className="w-3 h-3 text-blue-600" />
-                            <span>Mode: Sintesis AI ({profile.prebuiltVoiceFallback || 'Kore'})</span>
+                            <span>Mode: Sintesis AI ({profile.prebuiltVoiceFallback || 'Fenrir'})</span>
                           </>
                         )}
                         <span className="text-[9px] underline opacity-75 ml-1">Ubah</span>
@@ -604,11 +605,11 @@ export const AudioCloningManager: React.FC<AudioCloningManagerProps> = ({
                     onChange={(e) => setFallbackVoice(e.target.value as any)}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-900 focus:outline-hidden focus:border-blue-500 cursor-pointer"
                   >
-                    <option value="Kore">Kore - Suara Wanita / Ustadzah (Ramah & Hangat)</option>
-                    <option value="Fenrir">Fenrir - Suara Pria / Ustadz (Berwibawa & Mantap)</option>
-                    <option value="Puck">Puck - Suara Murid / Santri Anak (Ceria & Jelas)</option>
-                    <option value="Zephyr">Zephyr - Suara Netral (Tenang & Santun)</option>
-                    <option value="Charon">Charon - Suara Pengumuman Resmi (Tegas & Jelas)</option>
+                    <option value="Fenrir">Fenrir - Suara Pria / Ustadz (Berwibawa &amp; Mantap)</option>
+                    <option value="Charon">Charon - Suara Pria Pengumuman Resmi (Tegas &amp; Jelas)</option>
+                    <option value="Puck">Puck - Suara Murid / Santri Anak (Ceria &amp; Jelas)</option>
+                    <option value="Kore">Kore - Suara Wanita / Ustadzah (Ramah &amp; Hangat)</option>
+                    <option value="Zephyr">Zephyr - Suara Wanita / Netral (Tenang &amp; Santun)</option>
                   </select>
                   <p className="text-[10px] text-slate-400 mt-1">
                     {playbackMode === 'direct_recording'

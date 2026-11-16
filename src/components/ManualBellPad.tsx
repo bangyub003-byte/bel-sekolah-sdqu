@@ -151,6 +151,16 @@ export const ManualBellPad: React.FC<ManualBellPadProps> = ({
       customLanguage === 'id' ? `${audioSettings.globalPrefix}${rawText}` : rawText;
 
     try {
+      let resolvedTargetText =
+        customLanguage !== 'id' && customInputMode === 'direct_text' ? rawText : undefined;
+
+      if (customLanguage !== 'id' && customInputMode === 'auto_translate') {
+        const translated = await translateSpeechWithAI(rawText, customLanguage);
+        if (translated) {
+          resolvedTargetText = translated;
+        }
+      }
+
       await playBellSequence(
         customChime,
         fullText,
@@ -165,9 +175,9 @@ export const ManualBellPad: React.FC<ManualBellPadProps> = ({
         undefined,
         customLanguage,
         customInputMode,
-        customLanguage !== 'id' && customInputMode === 'direct_text' ? rawText : undefined
+        resolvedTargetText
       );
-      onLogManualBell(`Bel Manual Custom (${customLanguage.toUpperCase()})`, fullText);
+      onLogManualBell(`Bel Manual Custom (${customLanguage.toUpperCase()})`, resolvedTargetText || fullText);
       setCustomText('');
     } catch (err) {
       console.error('Trigger custom bell error:', err);
@@ -267,7 +277,10 @@ export const ManualBellPad: React.FC<ManualBellPadProps> = ({
                 <Globe className="w-3.5 h-3.5 text-indigo-600" />
                 <select
                   value={customLanguage}
-                  onChange={(e) => setCustomLanguage(e.target.value as SpeechLanguage)}
+                  onChange={(e) => {
+                    setCustomLanguage(e.target.value as SpeechLanguage);
+                    setCustomInputMode('auto_translate');
+                  }}
                   className="bg-white border border-slate-200 rounded-lg px-2 py-1 text-[11px] font-bold text-slate-800 cursor-pointer focus:outline-hidden focus:border-blue-500"
                 >
                   <option value="id">🇮🇩 Bahasa Indonesia</option>

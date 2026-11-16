@@ -347,13 +347,26 @@ export async function playChimeTone(
   });
 }
 
-// Helper to identify male voices and strictly filter out female voices
+// Helper to strictly filter out female browser/OS voices so male announcements never play a woman's voice
 export function isMaleVoice(v: SpeechSynthesisVoice): boolean {
   const nameLower = v.name.toLowerCase();
+
+  // Chrome/Google built-in Indonesian & US English voices are female unless explicitly labeled "male"
+  if (nameLower.includes('google ') && !nameLower.includes(' male')) {
+    return false;
+  }
+
   const femaleKeywords = [
-    'gadis', 'female', 'woman', 'zira', 'jenny', 'aria', 'samantha', 'victoria',
-    'kore', 'aoede', 'siti', 'dewi', 'putri', 'linda', 'susan', 'elena', 'helena',
-    'hazel', 'catherine', 'karen', 'chiu', 'hui', 'ting', 'wanita', 'perempuan',
+    'gadis', 'female', 'woman', 'wanita', 'perempuan', 'ustadzah',
+    'damayanti', 'kalpana', 'heera', 'hoda', 'laila', 'mariam', 'sara',
+    'libby', 'sonia', 'michelle', 'natasha', 'clara', 'moira', 'tessa',
+    'cortana', 'zira', 'jenny', 'aria', 'samantha', 'victoria', 'kore',
+    'aoede', 'zephyr', 'siti', 'dewi', 'putri', 'linda', 'susan', 'elena',
+    'helena', 'hazel', 'catherine', 'karen', 'chiu', 'hui', 'ting', 'eva',
+    'amy', 'emma', 'kate', 'joanna', 'kendra', 'kimberly', 'salli', 'ivy',
+    'maya', 'nadia', 'salma', 'fatima', 'amira', 'noor', 'fiona', 'kyoko',
+    'laura', 'lekha', 'luciana', 'melina', 'milena', 'monica', 'nora',
+    'paulina', 'veena', 'yuna', 'zosia', 'zuzana',
   ];
   if (femaleKeywords.some((kw) => nameLower.includes(kw))) {
     return false;
@@ -367,41 +380,37 @@ export function isMaleVoice(v: SpeechSynthesisVoice): boolean {
 export function getAvailableVoices(): SpeechSynthesisVoice[] {
   if (!('speechSynthesis' in window)) return [];
   const all = window.speechSynthesis.getVoices();
-  const males = all.filter(isMaleVoice);
-  return males.length > 0 ? males : all;
+  return all.filter(isMaleVoice);
 }
 
 /**
- * Auto-detect best Indonesian male speech voice (e.g. Microsoft Andika or masculine deep tone)
+ * Auto-detect best Indonesian male speech voice (e.g. Microsoft Ardi / Andika)
  */
 export function getIndonesianVoice(): SpeechSynthesisVoice | null {
   const voices = getAvailableVoices();
   if (voices.length === 0) return null;
 
-  // Search for Indonesian male voice first (e.g. Microsoft Andika)
-  const andikaVoice = voices.find(
+  // Search for Indonesian male voices first (Microsoft Ardi / Andika)
+  const preferredMale = voices.find(
     (v) =>
       (v.lang.toLowerCase().includes('id') || v.name.toLowerCase().includes('indonesia')) &&
-      v.name.toLowerCase().includes('andika')
+      (v.name.toLowerCase().includes('ardi') ||
+        v.name.toLowerCase().includes('andika') ||
+        v.name.toLowerCase().includes('male') ||
+        v.name.toLowerCase().includes('pria'))
   );
-  if (andikaVoice) return andikaVoice;
+  if (preferredMale) return preferredMale;
 
-  // Search for any Indonesian voice identified as male
+  // Any Indonesian or Malay non-female voice
   const idMaleVoice = voices.find(
     (v) =>
-      (v.lang.toLowerCase().includes('id') || v.name.toLowerCase().includes('indonesia')) &&
-      isMaleVoice(v)
+      v.lang.toLowerCase().startsWith('id') ||
+      v.name.toLowerCase().includes('indonesia') ||
+      v.lang.toLowerCase().startsWith('ms')
   );
   if (idMaleVoice) return idMaleVoice;
 
-  // Fallback to Indonesian voice with male pitch
-  const idVoice = voices.find(
-    (v) => v.lang.toLowerCase().includes('id') || v.name.toLowerCase().includes('indonesia')
-  );
-  if (idVoice) return idVoice;
-
-  // Fallback to first available male voice
-  return voices[0] || null;
+  return null;
 }
 // Global reference to prevent V8 garbage-collecting speech utterance before playback finishes in Chrome/Edge
 let activeSpeechUtterance: SpeechSynthesisUtterance | null = null;
@@ -411,15 +420,15 @@ const clientTtsCache = new Map<string, string>();
 // Client-side cache for AI translations
 const clientTranslateCache = new Map<string, string>();
 
-// Track if AI TTS quota is exhausted so the client instantly falls back to local speech without latency
-let isAiTtsQuotaExceeded = false;
+// Track temporary AI TTS quota cooldown (60s) so transient 429 doesn't lock out AI TTS permanently
+let aiTtsQuotaCooldownUntil = 0;
 
 export function getIsAiTtsQuotaExceeded(): boolean {
-  return isAiTtsQuotaExceeded;
+  return Date.now() < aiTtsQuotaCooldownUntil;
 }
 
 export function resetAiTtsQuotaStatus(): void {
-  isAiTtsQuotaExceeded = false;
+  aiTtsQuotaCooldownUntil = 0;
 }
 
 /**
@@ -437,36 +446,38 @@ export async function translateSpeechWithAI(
     return clientTranslateCache.get(cacheKey)!;
   }
 
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 14000);
 
-    const res = await fetch('/api/voice/translate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        text: text.trim(),
-        targetLanguage,
-      }),
-      signal: controller.signal,
-    });
+      const res = await fetch('/api/voice/translate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: text.trim(),
+          targetLanguage,
+        }),
+        signal: controller.signal,
+      });
 
-    clearTimeout(timeoutId);
-    if (!res.ok) return null;
+      clearTimeout(timeoutId);
+      if (!res.ok) continue;
 
-    const data = await res.json();
-    if (data.status === 'success' && data.translatedText) {
-      clientTranslateCache.set(cacheKey, data.translatedText);
-      return data.translatedText;
+      const data = await res.json();
+      if (data.status === 'success' && data.translatedText) {
+        clientTranslateCache.set(cacheKey, data.translatedText);
+        return data.translatedText;
+      }
+    } catch (_err) {
+      // Retry once on transient timeout/network blip
     }
-    return null;
-  } catch (_err) {
-    return null;
   }
+  return null;
 }
 
 /**
- * Find best browser voice for fallback by language
+ * Find best male browser voice for fallback by language
  */
 function getFallbackVoiceByLanguage(language: SpeechLanguage = 'id'): {
   voice: SpeechSynthesisVoice | null;
@@ -479,8 +490,17 @@ function getFallbackVoiceByLanguage(language: SpeechLanguage = 'id'): {
   }
   if (language === 'en') {
     const enVoice =
-      voices.find((v) => v.lang.toLowerCase().startsWith('en') && isMaleVoice(v)) ||
-      voices.find((v) => v.lang.toLowerCase().startsWith('en'));
+      voices.find(
+        (v) =>
+          v.lang.toLowerCase().startsWith('en') &&
+          (v.name.toLowerCase().includes('male') ||
+            v.name.toLowerCase().includes('david') ||
+            v.name.toLowerCase().includes('mark') ||
+            v.name.toLowerCase().includes('guy') ||
+            v.name.toLowerCase().includes('ryan') ||
+            v.name.toLowerCase().includes('george') ||
+            v.name.toLowerCase().includes('daniel'))
+      ) || voices.find((v) => v.lang.toLowerCase().startsWith('en'));
     return { voice: enVoice || null, bcp47: 'en-US' };
   }
   if (language === 'jv') {
@@ -496,6 +516,8 @@ function getFallbackVoiceByLanguage(language: SpeechLanguage = 'id'): {
 /**
  * Text to Speech (TTS) reader with support for AI Cloned Voices & Multilingual AI (ID, AR, EN, JV)
  */
+const VALID_GEMINI_VOICES = ['Fenrir', 'Charon', 'Puck', 'Kore', 'Zephyr'] as const;
+
 export async function generateClonedTTSAudio(
   text: string,
   sampleAudioDataUrl?: string,
@@ -510,14 +532,14 @@ export async function generateClonedTTSAudio(
     return clientTtsCache.get(cacheKey)!;
   }
 
-  // If daily Free Tier quota limit was reached, instantly return null to use local engine
-  if (isAiTtsQuotaExceeded) {
+  // Temporary 60s cooldown if rate limited
+  if (getIsAiTtsQuotaExceeded()) {
     return null;
   }
 
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 7500);
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
 
     const res = await fetch('/api/voice/clone-tts', {
       method: 'POST',
@@ -536,14 +558,14 @@ export async function generateClonedTTSAudio(
 
     if (!res.ok) {
       if (res.status === 429) {
-        isAiTtsQuotaExceeded = true;
+        aiTtsQuotaCooldownUntil = Date.now() + 60000;
       }
       return null;
     }
 
     const data = await res.json();
     if (data.quotaExceeded || data.status === 'quota_exceeded') {
-      isAiTtsQuotaExceeded = true;
+      aiTtsQuotaCooldownUntil = Date.now() + 60000;
       return null;
     }
 
@@ -558,7 +580,7 @@ export async function generateClonedTTSAudio(
 }
 
 /**
- * Text to Speech (TTS) reader
+ * Text to Speech (TTS) reader — prioritizes natural human Male Gemini AI ('Fenrir')
  */
 export async function speakTTS(
   text: string,
@@ -572,26 +594,27 @@ export async function speakTTS(
   }
 
   const isMultilingualAi = language !== 'id';
-  const isCloningRequested = forceAiSpeech || isMultilingualAi || !!overrideClonedVoiceId || settings.useClonedVoice;
+  const useAutomaticAiVoice = !settings.voiceURI || forceAiSpeech || isMultilingualAi || !!overrideClonedVoiceId || settings.useClonedVoice;
 
-  // Standard TTS is blocked if enableTTS is explicitly turned off and no cloning/multilingual AI is requested
-  if (!isCloningRequested && settings.enableTTS === false) {
+  if (!forceAiSpeech && !isMultilingualAi && !overrideClonedVoiceId && settings.enableTTS === false) {
     return;
   }
 
-  // Check if AI Voice Cloning is active or override voice ID provided
   const targetVoiceId = overrideClonedVoiceId || (settings.useClonedVoice ? settings.activeClonedVoiceId : undefined);
   const activeProfile = settings.clonedProfiles?.find((p) => p.id === targetVoiceId);
 
   // Only use raw sample playback if NOT forcing AI speech/multilingual and profile is explicitly direct_recording
-  if (!forceAiSpeech && !isMultilingualAi && isCloningRequested && activeProfile?.playbackMode === 'direct_recording' && activeProfile.sampleAudioUrl) {
+  if (!forceAiSpeech && !isMultilingualAi && targetVoiceId && activeProfile?.playbackMode === 'direct_recording' && activeProfile.sampleAudioUrl) {
     await playCustomAudio(activeProfile.sampleAudioUrl, settings.volume ?? 1.0);
     return;
   }
 
-  // Attempt AI TTS generation first when cloned/multilingual/AI speech is requested
-  if (isCloningRequested) {
-    const voiceFallback = activeProfile?.prebuiltVoiceFallback || (targetVoiceId === 'Puck' ? 'Puck' : 'Fenrir');
+  // Attempt Gemini Human AI TTS generation first (defaults to Male 'Fenrir')
+  if (useAutomaticAiVoice) {
+    const directVoice = targetVoiceId && (VALID_GEMINI_VOICES as readonly string[]).includes(targetVoiceId)
+      ? targetVoiceId
+      : undefined;
+    const voiceFallback = directVoice || activeProfile?.prebuiltVoiceFallback || 'Fenrir';
     const profileName = activeProfile?.name || targetVoiceId || "SD Qur'an Unggulan";
 
     try {
@@ -612,7 +635,7 @@ export async function speakTTS(
     }
   }
 
-  // Fallback to Web Speech API with tailored pitch, rate, and language
+  // Fallback to Web Speech API strictly favoring verified male voices
   return new Promise((resolve) => {
     if (!('speechSynthesis' in window)) {
       resolve();
@@ -629,36 +652,48 @@ export async function speakTTS(
       activeSpeechUtterance = utterance;
 
       let customRate = settings.rate || 0.95;
-      let customPitch = settings.pitch ? Math.min(settings.pitch, 0.88) : 0.84;
+      let customPitch = settings.pitch ? Math.min(settings.pitch, 0.85) : 0.82;
 
-      if (isCloningRequested) {
-        const nameLower = (activeProfile?.name || targetVoiceId || '').toLowerCase();
-        if (nameLower.includes('murid') || nameLower.includes('anak') || nameLower.includes('santri') || activeProfile?.prebuiltVoiceFallback === 'Puck') {
-          customPitch = 1.05;
-          customRate = 1.0;
-        } else {
-          customPitch = 0.82;
-          customRate = 0.92;
-        }
+      if (targetVoiceId && (activeProfile?.prebuiltVoiceFallback === 'Puck' || targetVoiceId === 'Puck')) {
+        customPitch = 1.0;
+        customRate = 1.0;
       }
 
       utterance.rate = customRate;
       utterance.pitch = customPitch;
       utterance.volume = settings.volume ?? 1.0;
 
+      const maleVoices = getAvailableVoices();
       if (language !== 'id') {
         const { voice, bcp47 } = getFallbackVoiceByLanguage(language);
         utterance.lang = bcp47;
-        if (voice) utterance.voice = voice;
+        if (voice) {
+          utterance.voice = voice;
+        } else {
+          // No verified male voice for target lang on this OS: lower pitch
+          utterance.pitch = 0.72;
+        }
       } else {
         utterance.lang = 'id-ID';
-        const voices = getAvailableVoices();
         if (settings.voiceURI) {
-          const chosenVoice = voices.find((v) => v.voiceURI === settings.voiceURI);
-          if (chosenVoice) utterance.voice = chosenVoice;
+          const chosenVoice = maleVoices.find((v) => v.voiceURI === settings.voiceURI);
+          if (chosenVoice) {
+            utterance.voice = chosenVoice;
+          } else {
+            const idVoice = getIndonesianVoice();
+            if (idVoice) {
+              utterance.voice = idVoice;
+            } else {
+              utterance.pitch = 0.65;
+            }
+          }
         } else {
           const idVoice = getIndonesianVoice();
-          if (idVoice) utterance.voice = idVoice;
+          if (idVoice) {
+            utterance.voice = idVoice;
+          } else {
+            utterance.pitch = 0.65;
+          }
         }
       }
 
@@ -752,6 +787,8 @@ export async function playBellSequence(
   const targetVoiceId = clonedVoiceId || (settings.useClonedVoice ? settings.activeClonedVoiceId : undefined);
   const activeProfile = settings.clonedProfiles?.find((p) => p.id === targetVoiceId);
   const useMultilingualAi = speechLanguage !== 'id';
+  const useStandardMaleAi = audioType === 'tts' && settings.enableTTS !== false;
+  const shouldGenerateAiAudio = audioType === 'cloned' || useMultilingualAi || useStandardMaleAi;
 
   // Resolve final spoken text and prefetch AI audio CONCURRENTLY while the intro chime rings
   let resolvedSpokenText = fullText;
@@ -779,13 +816,18 @@ export async function playBellSequence(
 
     resolvedSpokenText = textToSpeak;
 
-    if ((audioType === 'cloned' || useMultilingualAi) && textToSpeak.trim().length > 0) {
-      const voiceFallback = activeProfile?.prebuiltVoiceFallback || (targetVoiceId === 'Puck' ? 'Puck' : 'Fenrir');
+    // If audioType is 'tts' (TTS Pria AI), strictly enforce Male Gemini voice 'Fenrir' (ignore any female cloned profiles)
+    if (shouldGenerateAiAudio && textToSpeak.trim().length > 0 && !(audioType === 'cloned' && !useMultilingualAi && activeProfile?.playbackMode === 'direct_recording' && activeProfile.sampleAudioUrl)) {
+      const voiceFallback =
+        audioType === 'tts'
+          ? 'Fenrir'
+          : activeProfile?.prebuiltVoiceFallback || (targetVoiceId === 'Puck' ? 'Puck' : 'Fenrir');
+
       const audioUrl = await generateClonedTTSAudio(
         textToSpeak,
         undefined,
         voiceFallback,
-        activeProfile?.name,
+        audioType === 'tts' ? 'Suara Pria AI' : activeProfile?.name,
         speechLanguage
       );
       return { spokenText: textToSpeak, aiAudioUrl: audioUrl };
@@ -805,7 +847,7 @@ export async function playBellSequence(
   const prepared = await prepareTextAndAudioPromise;
   resolvedSpokenText = prepared.spokenText;
 
-  // Step 2: Play Voice (Direct Audio Recording, AI Cloned/Multilingual Voice, or TTS)
+  // Step 2: Play Voice (Direct Audio Recording, AI Cloned/Multilingual Voice, or Male AI TTS)
   if (audioType === 'recording' && customAudioUrl) {
     const repeatCount = Math.max(1, settings.repeatSpeechCount || 1);
     for (let i = 0; i < repeatCount; i++) {
@@ -814,7 +856,15 @@ export async function playBellSequence(
         await new Promise((res) => setTimeout(res, 500));
       }
     }
-  } else if (audioType === 'cloned' || useMultilingualAi) {
+  } else if (audioType === 'cloned' && !useMultilingualAi && activeProfile?.playbackMode === 'direct_recording' && activeProfile.sampleAudioUrl) {
+    const repeatCount = Math.max(1, settings.repeatSpeechCount || 1);
+    for (let i = 0; i < repeatCount; i++) {
+      await playCustomAudio(activeProfile.sampleAudioUrl, speechVolume);
+      if (i < repeatCount - 1) {
+        await new Promise((res) => setTimeout(res, 500));
+      }
+    }
+  } else if (shouldGenerateAiAudio) {
     if (!useMultilingualAi && settings.useCustomPrefixAudio && settings.customPrefixAudioUrl) {
       await playCustomAudio(settings.customPrefixAudioUrl, speechVolume);
       await new Promise((res) => setTimeout(res, 250));
@@ -833,8 +883,9 @@ export async function playBellSequence(
         }
       }
     }
-    if (!aiPlayed) {
-      await speakTTS(resolvedSpokenText, settings, targetVoiceId, true, speechLanguage);
+    if (!aiPlayed && resolvedSpokenText.trim().length > 0) {
+      const fallbackVoiceId = audioType === 'tts' ? 'Fenrir' : targetVoiceId;
+      await speakTTS(resolvedSpokenText, settings, fallbackVoiceId, true, speechLanguage);
     }
   } else {
     if (settings.useCustomPrefixAudio && settings.customPrefixAudioUrl) {
@@ -845,7 +896,7 @@ export async function playBellSequence(
     if (settings.enableTTS && resolvedSpokenText.trim().length > 0) {
       const repeatCount = Math.max(1, settings.repeatSpeechCount || 1);
       for (let i = 0; i < repeatCount; i++) {
-        await speakTTS(resolvedSpokenText, settings, undefined, false, speechLanguage);
+        await speakTTS(resolvedSpokenText, settings, 'Fenrir', false, speechLanguage);
         if (i < repeatCount - 1) {
           await new Promise((res) => setTimeout(res, 500));
         }

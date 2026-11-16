@@ -87,6 +87,7 @@ export const ScheduleEditorModal: React.FC<ScheduleEditorModalProps> = ({
   const [speechLanguage, setSpeechLanguage] = useState<SpeechLanguage>('id');
   const [speechInputMode, setSpeechInputMode] = useState<SpeechInputMode>('auto_translate');
   const [translatedSpeechText, setTranslatedSpeechText] = useState<string>('');
+  const [translatedByLang, setTranslatedByLang] = useState<Partial<Record<SpeechLanguage, { text: string; source: string }>>>({});
   const [isTranslating, setIsTranslating] = useState(false);
   const [translateError, setTranslateError] = useState<string | null>(null);
 
@@ -110,9 +111,16 @@ export const ScheduleEditorModal: React.FC<ScheduleEditorModalProps> = ({
       setClonedVoiceId(editingItem.clonedVoiceId);
       setEnableOutroChime(editingItem.enableOutroChime || false);
       setOutroChimeType(editingItem.outroChimeType || 'none');
-      setSpeechLanguage(editingItem.speechLanguage || 'id');
+      const initLang = editingItem.speechLanguage || 'id';
+      const initTrans = editingItem.translatedSpeechText || '';
+      setSpeechLanguage(initLang);
       setSpeechInputMode(editingItem.speechInputMode || 'auto_translate');
-      setTranslatedSpeechText(editingItem.translatedSpeechText || '');
+      setTranslatedSpeechText(initTrans);
+      setTranslatedByLang(
+        initLang !== 'id' && initTrans
+          ? { [initLang]: { text: initTrans, source: `${audioSettings.globalPrefix}${editingItem.speechText}` } }
+          : {}
+      );
     } else {
       setTime('07:20');
       setLabel("Jam Pelajaran ke-1 (Tahfidzul Qur'an)");
@@ -130,6 +138,7 @@ export const ScheduleEditorModal: React.FC<ScheduleEditorModalProps> = ({
       setSpeechLanguage('id');
       setSpeechInputMode('auto_translate');
       setTranslatedSpeechText('');
+      setTranslatedByLang({});
     }
     setTranslateError(null);
     // Reset batch state on open
@@ -172,9 +181,78 @@ export const ScheduleEditorModal: React.FC<ScheduleEditorModalProps> = ({
     }
   };
 
-  const handleSave = (e: React.FormEvent) => {
+  const runTranslationFor = async (
+    targetLang: SpeechLanguage,
+    rawIndonesianText: string
+  ): Promise<string | null> => {
+    if (targetLang === 'id') return null;
+    const sourceText = `${audioSettings.globalPrefix}${rawIndonesianText.trim()}`;
+    if (!sourceText.trim()) return null;
+
+    setIsTranslating(true);
+    setTranslateError(null);
+    try {
+      const result = await translateSpeechWithAI(sourceText, targetLang);
+      if (result) {
+        setTranslatedSpeechText(result);
+        setTranslatedByLang((prev) => ({
+          ...prev,
+          [targetLang]: { text: result, source: sourceText },
+        }));
+        return result;
+      } else {
+        setTranslateError('Gagal menerjemahkan dengan AI. Silakan coba lagi atau isi teks secara manual.');
+        return null;
+      }
+    } catch {
+      setTranslateError('Terjadi kesalahan saat menghubungi layanan terjemahan AI.');
+      return null;
+    } finally {
+      setIsTranslating(false);
+    }
+  };
+
+  const handleSelectSpeechLanguage = async (nextLang: SpeechLanguage) => {
+    setSpeechLanguage(nextLang);
+    setTranslateError(null);
+
+    if (nextLang === 'id') {
+      return;
+    }
+
+    const sourceText = `${audioSettings.globalPrefix}${speechText.trim()}`;
+    const cachedEntry = translatedByLang[nextLang];
+
+    if (speechInputMode === 'direct_text') {
+      setTranslatedSpeechText(cachedEntry?.text || '');
+      return;
+    }
+
+    // auto_translate mode: reuse if source text hasn't changed, otherwise translate automatically right now
+    if (cachedEntry && cachedEntry.source === sourceText && cachedEntry.text.trim()) {
+      setTranslatedSpeechText(cachedEntry.text);
+    } else {
+      setTranslatedSpeechText('');
+      await runTranslationFor(nextLang, speechText);
+    }
+  };
+
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!time || !label.trim()) return;
+
+    let finalTranslatedText = speechLanguage !== 'id' ? translatedSpeechText.trim() : undefined;
+    if (speechLanguage !== 'id' && speechInputMode === 'auto_translate') {
+      const sourceText = `${audioSettings.globalPrefix}${speechText.trim()}`;
+      const cachedEntry = translatedByLang[speechLanguage];
+      const isStale = cachedEntry && cachedEntry.source !== sourceText && !translatedSpeechText.trim();
+      if (!finalTranslatedText || isStale) {
+        const autoRes = await runTranslationFor(speechLanguage, speechText);
+        if (autoRes) {
+          finalTranslatedText = autoRes.trim();
+        }
+      }
+    }
 
     const newItem: ScheduleItem = {
       id: editingItem ? editingItem.id : `sch-${Date.now()}`,
@@ -184,7 +262,7 @@ export const ScheduleEditorModal: React.FC<ScheduleEditorModalProps> = ({
       speechText: speechText.trim() || label.trim(),
       speechLanguage,
       speechInputMode,
-      translatedSpeechText: speechLanguage !== 'id' ? translatedSpeechText.trim() : undefined,
+      translatedSpeechText: speechLanguage !== 'id' ? finalTranslatedText : undefined,
       chimeType,
       days,
       enabled,
@@ -207,23 +285,7 @@ export const ScheduleEditorModal: React.FC<ScheduleEditorModalProps> = ({
 
   const handleTranslateNow = async () => {
     if (speechLanguage === 'id') return;
-    const sourceText = `${audioSettings.globalPrefix}${speechText.trim()}`;
-    if (!sourceText.trim()) return;
-
-    setIsTranslating(true);
-    setTranslateError(null);
-    try {
-      const result = await translateSpeechWithAI(sourceText, speechLanguage);
-      if (result) {
-        setTranslatedSpeechText(result);
-      } else {
-        setTranslateError('Gagal menerjemahkan dengan AI. Silakan coba lagi atau isi teks secara manual.');
-      }
-    } catch {
-      setTranslateError('Terjadi kesalahan saat menghubungi layanan terjemahan AI.');
-    } finally {
-      setIsTranslating(false);
-    }
+    await runTranslationFor(speechLanguage, speechText);
   };
 
   const handleTestChimeOnly = async () => {
@@ -477,7 +539,13 @@ export const ScheduleEditorModal: React.FC<ScheduleEditorModalProps> = ({
                     rows={2}
                     required={speechLanguage === 'id' || speechInputMode === 'auto_translate'}
                     value={speechText}
-                    onChange={(e) => setSpeechText(e.target.value)}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setSpeechText(val);
+                      if (speechLanguage !== 'id' && speechInputMode === 'auto_translate') {
+                        setTranslatedSpeechText('');
+                      }
+                    }}
                     placeholder="memasuki jam pelajaran ke-1."
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm text-slate-900 placeholder-slate-400 focus:outline-hidden focus:border-blue-500 focus:bg-white transition"
                   />
@@ -517,10 +585,7 @@ export const ScheduleEditorModal: React.FC<ScheduleEditorModalProps> = ({
                       <button
                         key={opt.code}
                         type="button"
-                        onClick={() => {
-                          setSpeechLanguage(opt.code);
-                          setTranslateError(null);
-                        }}
+                        onClick={() => handleSelectSpeechLanguage(opt.code)}
                         className={`py-2 px-2.5 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
                           speechLanguage === opt.code
                             ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
@@ -538,7 +603,12 @@ export const ScheduleEditorModal: React.FC<ScheduleEditorModalProps> = ({
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                         <button
                           type="button"
-                          onClick={() => setSpeechInputMode('auto_translate')}
+                          onClick={async () => {
+                            setSpeechInputMode('auto_translate');
+                            if (!translatedSpeechText.trim() && speechText.trim()) {
+                              await runTranslationFor(speechLanguage, speechText);
+                            }
+                          }}
                           className={`px-3 py-2 rounded-xl text-xs font-bold border text-left transition cursor-pointer flex items-center gap-2 ${
                             speechInputMode === 'auto_translate'
                               ? 'bg-white border-indigo-500 text-indigo-900 ring-2 ring-indigo-500/20'
@@ -654,10 +724,18 @@ export const ScheduleEditorModal: React.FC<ScheduleEditorModalProps> = ({
                 </span>
                 <button
                   type="button"
-                  disabled={isPlayingTest}
+                  disabled={isPlayingTest || isTranslating}
                   onClick={async () => {
                     setIsPlayingTest(true);
                     try {
+                      let effectiveTranslation = translatedSpeechText;
+                      if (speechLanguage !== 'id' && speechInputMode === 'auto_translate' && !effectiveTranslation.trim()) {
+                        const res = await runTranslationFor(speechLanguage, speechText);
+                        if (!res) {
+                          return;
+                        }
+                        effectiveTranslation = res;
+                      }
                       await onTestSound(
                         chimeType,
                         speechText,
@@ -668,7 +746,7 @@ export const ScheduleEditorModal: React.FC<ScheduleEditorModalProps> = ({
                         outroChimeType,
                         speechLanguage,
                         speechInputMode,
-                        translatedSpeechText
+                        effectiveTranslation
                       );
                     } finally {
                       setIsPlayingTest(false);

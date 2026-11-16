@@ -53,7 +53,13 @@ export const VoiceSettings: React.FC<VoiceSettingsProps> = ({
         await playCustomAudio(settings.customPrefixAudioUrl, settings.volume);
       } else {
         const testText = `${settings.globalPrefix}memasuki jam pelajaran ke-1, Tahfidzul Qur'an. Uji coba suara berhasil.`;
-        await speakTTS(testText, settings);
+        const useValidLocalVoice = settings.voiceURI && voices.some((v) => v.voiceURI === settings.voiceURI);
+        await speakTTS(
+          testText,
+          settings,
+          useValidLocalVoice ? undefined : (settings.useClonedVoice ? settings.activeClonedVoiceId : 'Fenrir'),
+          !useValidLocalVoice
+        );
       }
 
       // If outro chime is enabled
@@ -190,11 +196,11 @@ export const VoiceSettings: React.FC<VoiceSettingsProps> = ({
           </label>
 
           <select
-            value={settings.voiceURI}
+            value={voices.some((v) => v.voiceURI === settings.voiceURI) ? settings.voiceURI : ''}
             onChange={(e) => onUpdateSettings({ ...settings, voiceURI: e.target.value })}
             className="w-full bg-white border border-slate-300 rounded-xl px-4 py-2.5 text-xs sm:text-sm text-slate-900 focus:outline-hidden focus:border-blue-500 cursor-pointer"
           >
-            <option value="">-- 👨 Suara Otomatis Pria Indonesia (Sistem) --</option>
+            <option value="">-- 👨 Suara Otomatis Pria Indonesia (AI Manusia) --</option>
             {voices.map((v) => (
               <option key={v.voiceURI} value={v.voiceURI}>
                 👨 {v.name} ({v.lang})
