@@ -143,7 +143,7 @@ export default function App() {
   );
 
   const murottalAudioRef = useRef<HTMLAudioElement | null>(null);
-  const lastMurottalFiredRef = useRef<string>('');
+  const firedMurottalKeysRef = useRef<Set<string>>(new Set());
 
   // Today's Day of Week (0 = Minggu, 1 = Senin, ..., 6 = Sabtu)
   const todayDayNum = getDayOfWeekNumber(currentTime) as DayOfWeek;
@@ -157,8 +157,25 @@ export default function App() {
   const [editingScheduleItem, setEditingScheduleItem] = useState<ScheduleItem | null>(null);
   const [isImportExportOpen, setIsImportExportOpen] = useState(false);
 
-  // Ref to prevent duplicate bell triggers within same minute
-  const lastFiredKeyRef = useRef<string>('');
+  // Refs to guarantee scheduled bells NEVER fire twice in the same minute (even across duplicate schedules or multiple tabs)
+  const firedMinutesRef = useRef<Set<string>>(new Set());
+  const schedulesRef = useRef<ScheduleItem[]>(schedules);
+  const audioSettingsRef = useRef<AudioSettings>(audioSettings);
+  const murottalConfigRef = useRef<MurottalConfig>(murottalConfig);
+  const triggerAutomaticBellRef = useRef<(item: ScheduleItem, dayNum: DayOfWeek) => Promise<void>>(async () => {});
+  const handlePlayMurottalTrackRef = useRef<(track: MurottalTrack) => void>(() => {});
+
+  useEffect(() => {
+    schedulesRef.current = schedules;
+  }, [schedules]);
+
+  useEffect(() => {
+    audioSettingsRef.current = audioSettings;
+  }, [audioSettings]);
+
+  useEffect(() => {
+    murottalConfigRef.current = murottalConfig;
+  }, [murottalConfig]);
 
   // Persist Schedules
   useEffect(() => {
@@ -309,29 +326,36 @@ export default function App() {
 
   // Master 1-Second Clock & Bell Evaluator Loop
   useEffect(() => {
+    const LOCAL_AUTO_BELL_LOCK_KEY = 'sd_quran_auto_bell_minute_lock_v1';
+
     const clockInterval = setInterval(() => {
       const now = getSynchronizedDate();
       setCurrentTime(now);
 
+      const currentSchedules = schedulesRef.current;
+      const currentSettings = audioSettingsRef.current;
+      const currentMurottal = murottalConfigRef.current;
+
+      const dateKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
       const currentHHMM = format24HourTime(now, false); // HH:MM
       const dayNum = getDayOfWeekNumber(now) as DayOfWeek;
-      const disabledDays = audioSettings.disabledDays ?? [0];
+      const disabledDays = currentSettings.disabledDays ?? [0];
       const isTodayDisabled = disabledDays.includes(dayNum);
 
       // If today (e.g. Sabtu or Minggu) is disabled, DO NOT trigger Murottal or Bells even if PC stays on
       if (!isTodayDisabled) {
-        // 1. Check Automatic Murottal Trigger (evaluates all customized schedule slots without background tick misses)
+        // 1. Check Automatic Murottal Trigger (Set-based per-date-minute deduplication)
         const slotsToEvaluate =
-          murottalConfig.scheduleSlots && murottalConfig.scheduleSlots.length > 0
-            ? murottalConfig.scheduleSlots
+          currentMurottal.scheduleSlots && currentMurottal.scheduleSlots.length > 0
+            ? currentMurottal.scheduleSlots
             : [
                 {
                   id: 'slot-pagi',
-                  time: murottalConfig.autoStartTime || '06:00',
+                  time: currentMurottal.autoStartTime || '06:00',
                   label: 'Murottal Pagi Otomatis',
-                  enabled: murottalConfig.enabledAutoPlay,
-                  trackId: murottalConfig.selectedTrackId,
-                  days: murottalConfig.activeDays,
+                  enabled: currentMurottal.enabledAutoPlay,
+                  trackId: currentMurottal.selectedTrackId,
+                  days: currentMurottal.activeDays,
                 },
               ];
 
@@ -341,14 +365,18 @@ export default function App() {
             currentHHMM === slot.time &&
             slot.days.includes(dayNum)
           ) {
-            const mKey = `${dayNum}-${currentHHMM}-murottal-${slot.id}`;
-            if (lastMurottalFiredRef.current !== mKey) {
-              lastMurottalFiredRef.current = mKey;
+            const mKey = `${dateKey}-${currentHHMM}-murottal-${slot.id}`;
+            if (!firedMurottalKeysRef.current.has(mKey)) {
+              firedMurottalKeysRef.current.add(mKey);
+              if (firedMurottalKeysRef.current.size > 50) {
+                firedMurottalKeysRef.current.clear();
+                firedMurottalKeysRef.current.add(mKey);
+              }
               const targetTrack =
                 (slot.trackId && DEFAULT_JUZ_30_TRACKS.find((t) => t.id === slot.trackId)) ||
-                DEFAULT_JUZ_30_TRACKS.find((t) => t.id === murottalConfig.selectedTrackId) ||
+                DEFAULT_JUZ_30_TRACKS.find((t) => t.id === currentMurottal.selectedTrackId) ||
                 DEFAULT_JUZ_30_TRACKS[1];
-              handlePlayMurottalTrack(targetTrack);
+              handlePlayMurottalTrackRef.current(targetTrack);
 
               // Add audit log
               const newLog: BellLog = {
@@ -366,26 +394,52 @@ export default function App() {
           }
         });
 
-        // 2. Check Scheduled Bells for current HH:MM (guaranteed trigger even if browser throttles background ticks)
-        const matchingBells = schedules.filter(
-          (item) =>
-            item.enabled &&
-            item.time === currentHHMM &&
-            item.days.includes(dayNum)
-        );
+        // 2. Check Scheduled Bells for current HH:MM — strictly ONCE per minute (prevents duplicate readings)
+        const minuteKey = `${dateKey}-${currentHHMM}`;
+        if (!firedMinutesRef.current.has(minuteKey)) {
+          const matchingBells = currentSchedules.filter(
+            (item) =>
+              item.enabled &&
+              item.time === currentHHMM &&
+              item.days.includes(dayNum)
+          );
 
-        matchingBells.forEach((bell) => {
-          const fireKey = `${dayNum}-${currentHHMM}-${bell.id}`;
-          if (lastFiredKeyRef.current !== fireKey) {
-            lastFiredKeyRef.current = fireKey;
-            triggerAutomaticBell(bell, dayNum);
+          if (matchingBells.length > 0) {
+            // Mark minute immediately before any async call
+            firedMinutesRef.current.add(minuteKey);
+            if (firedMinutesRef.current.size > 60) {
+              firedMinutesRef.current.clear();
+              firedMinutesRef.current.add(minuteKey);
+            }
+
+            // Cross-tab lock so two open browser tabs never read the same scheduled bell twice
+            let lockedByOtherTab = false;
+            try {
+              const prevLock = localStorage.getItem(LOCAL_AUTO_BELL_LOCK_KEY);
+              if (prevLock === minuteKey) {
+                lockedByOtherTab = true;
+              } else {
+                localStorage.setItem(LOCAL_AUTO_BELL_LOCK_KEY, minuteKey);
+              }
+            } catch {}
+
+            if (!lockedByOtherTab) {
+              // If multiple schedules overlap at exact same HH:MM, pick the most recently customized one so it never plays twice
+              const chosenBell =
+                matchingBells.length === 1
+                  ? matchingBells[0]
+                  : [...matchingBells].reverse().find((b) => b.id.startsWith('sch-') || (b.audioType && b.audioType !== 'tts')) ||
+                    matchingBells[matchingBells.length - 1];
+
+              triggerAutomaticBellRef.current(chosenBell, dayNum);
+            }
           }
-        });
+        }
       }
     }, 1000);
 
     return () => clearInterval(clockInterval);
-  }, [schedules, audioSettings, murottalConfig]);
+  }, []);
 
   // Murottal Audio Controls
   const handlePlayMurottalTrack = (track: MurottalTrack) => {
@@ -530,6 +584,9 @@ export default function App() {
       console.error('Error firing automatic bell sequence:', err);
     }
   };
+
+  triggerAutomaticBellRef.current = triggerAutomaticBell;
+  handlePlayMurottalTrackRef.current = handlePlayMurottalTrack;
 
   // Global Day Mute/Off Toggle (specifically for disabling Saturday / Sunday Bells + Murottal)
   const disabledDays = audioSettings.disabledDays ?? [0];

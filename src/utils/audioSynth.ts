@@ -2,6 +2,30 @@ import { ChimeType, AudioSettings, CustomChime, SpeechLanguage, SpeechInputMode 
 import { playUniversalAudio, stopAllCustomAudio } from './universalAudioPlayer';
 
 let audioCtx: AudioContext | null = null;
+let activeBellSequenceId = 0;
+let activeChimeGain: GainNode | null = null;
+let activeChimeTimeout: ReturnType<typeof setTimeout> | null = null;
+let activeChimeResolve: (() => void) | null = null;
+
+export function stopAllChimes(): void {
+  if (activeChimeTimeout) {
+    clearTimeout(activeChimeTimeout);
+    activeChimeTimeout = null;
+  }
+  if (activeChimeGain && audioCtx) {
+    try {
+      activeChimeGain.gain.cancelScheduledValues(audioCtx.currentTime);
+      activeChimeGain.gain.setValueAtTime(0, audioCtx.currentTime);
+      activeChimeGain.disconnect();
+    } catch {}
+    activeChimeGain = null;
+  }
+  if (activeChimeResolve) {
+    const res = activeChimeResolve;
+    activeChimeResolve = null;
+    res();
+  }
+}
 
 export function getAudioContext(): AudioContext {
   if (!audioCtx) {
@@ -24,6 +48,8 @@ export async function playChimeTone(
   customChimes?: CustomChime[],
   directCustomChimeUrl?: string
 ): Promise<void> {
+  stopAllChimes();
+
   // If direct custom chime URL is passed, play it
   if (directCustomChimeUrl) {
     await playCustomAudio(directCustomChimeUrl, masterVolume);
@@ -46,6 +72,8 @@ export async function playChimeTone(
       const volNode = ctx.createGain();
       volNode.gain.setValueAtTime(Math.min(1.0, Math.max(0, masterVolume)), now);
       volNode.connect(ctx.destination);
+      activeChimeGain = volNode;
+      activeChimeResolve = resolve;
 
       let totalDuration = 6.0;
 
@@ -337,11 +365,22 @@ export async function playChimeTone(
         totalDuration = 5.5;
       }
 
-      setTimeout(() => {
+      activeChimeTimeout = setTimeout(() => {
+        activeChimeTimeout = null;
+        if (activeChimeGain === volNode) {
+          try {
+            volNode.disconnect();
+          } catch {}
+          activeChimeGain = null;
+        }
+        if (activeChimeResolve === resolve) {
+          activeChimeResolve = null;
+        }
         resolve();
       }, totalDuration * 1000);
     } catch (err) {
       console.error('Audio synth error:', err);
+      activeChimeResolve = null;
       resolve();
     }
   });
@@ -771,7 +810,9 @@ export async function playBellSequence(
   speechInputMode: SpeechInputMode = 'auto_translate',
   translatedSpeechText?: string
 ): Promise<void> {
-  // Prevent double sound / overlapping: Stop previous custom audio and cancel any running speech
+  // Prevent double sound / overlapping: increment sequence token and stop ALL chimes, custom audio, and speech
+  const seqId = ++activeBellSequenceId;
+  stopAllChimes();
   stopAllCustomAudio();
   if ('speechSynthesis' in window) {
     try {
@@ -839,19 +880,24 @@ export async function playBellSequence(
   // Step 1: Play Intro Chime ONCE
   if (actualChimeType !== 'none') {
     await playChimeTone(actualChimeType, combinedVolume, settings.customChimes, customChimeUrl);
+    if (seqId !== activeBellSequenceId) return;
   }
 
   // Crisp, natural pause between chime and speech (250ms)
   await new Promise((res) => setTimeout(res, 250));
+  if (seqId !== activeBellSequenceId) return;
 
   const prepared = await prepareTextAndAudioPromise;
+  if (seqId !== activeBellSequenceId) return;
   resolvedSpokenText = prepared.spokenText;
 
   // Step 2: Play Voice (Direct Audio Recording, AI Cloned/Multilingual Voice, or Male AI TTS)
   if (audioType === 'recording' && customAudioUrl) {
     const repeatCount = Math.max(1, settings.repeatSpeechCount || 1);
     for (let i = 0; i < repeatCount; i++) {
+      if (seqId !== activeBellSequenceId) return;
       await playCustomAudio(customAudioUrl, speechVolume);
+      if (seqId !== activeBellSequenceId) return;
       if (i < repeatCount - 1) {
         await new Promise((res) => setTimeout(res, 500));
       }
@@ -859,7 +905,9 @@ export async function playBellSequence(
   } else if (audioType === 'cloned' && !useMultilingualAi && activeProfile?.playbackMode === 'direct_recording' && activeProfile.sampleAudioUrl) {
     const repeatCount = Math.max(1, settings.repeatSpeechCount || 1);
     for (let i = 0; i < repeatCount; i++) {
+      if (seqId !== activeBellSequenceId) return;
       await playCustomAudio(activeProfile.sampleAudioUrl, speechVolume);
+      if (seqId !== activeBellSequenceId) return;
       if (i < repeatCount - 1) {
         await new Promise((res) => setTimeout(res, 500));
       }
@@ -867,7 +915,9 @@ export async function playBellSequence(
   } else if (shouldGenerateAiAudio) {
     if (!useMultilingualAi && settings.useCustomPrefixAudio && settings.customPrefixAudioUrl) {
       await playCustomAudio(settings.customPrefixAudioUrl, speechVolume);
+      if (seqId !== activeBellSequenceId) return;
       await new Promise((res) => setTimeout(res, 250));
+      if (seqId !== activeBellSequenceId) return;
     }
 
     const aiAudioUrl = prepared.aiAudioUrl;
@@ -876,33 +926,41 @@ export async function playBellSequence(
     if (aiAudioUrl) {
       const repeatCount = Math.max(1, settings.repeatSpeechCount || 1);
       for (let i = 0; i < repeatCount; i++) {
+        if (seqId !== activeBellSequenceId) return;
         const ok = await playCustomAudio(aiAudioUrl, speechVolume);
+        if (seqId !== activeBellSequenceId) return;
         if (ok) aiPlayed = true;
         if (i < repeatCount - 1) {
           await new Promise((res) => setTimeout(res, 500));
         }
       }
     }
-    if (!aiPlayed && resolvedSpokenText.trim().length > 0) {
+    if (!aiPlayed && resolvedSpokenText.trim().length > 0 && seqId === activeBellSequenceId) {
       const fallbackVoiceId = audioType === 'tts' ? 'Fenrir' : targetVoiceId;
       await speakTTS(resolvedSpokenText, settings, fallbackVoiceId, true, speechLanguage);
     }
   } else {
     if (settings.useCustomPrefixAudio && settings.customPrefixAudioUrl) {
       await playCustomAudio(settings.customPrefixAudioUrl, speechVolume);
+      if (seqId !== activeBellSequenceId) return;
       await new Promise((res) => setTimeout(res, 250));
+      if (seqId !== activeBellSequenceId) return;
     }
 
     if (settings.enableTTS && resolvedSpokenText.trim().length > 0) {
       const repeatCount = Math.max(1, settings.repeatSpeechCount || 1);
       for (let i = 0; i < repeatCount; i++) {
+        if (seqId !== activeBellSequenceId) return;
         await speakTTS(resolvedSpokenText, settings, 'Fenrir', false, speechLanguage);
+        if (seqId !== activeBellSequenceId) return;
         if (i < repeatCount - 1) {
           await new Promise((res) => setTimeout(res, 500));
         }
       }
     }
   }
+
+  if (seqId !== activeBellSequenceId) return;
 
   // Step 3: Outro Chime
   const isOutroExplicitlyRequested =
@@ -913,6 +971,7 @@ export async function playBellSequence(
   if (isOutroExplicitlyRequested) {
     const outroDelay = settings.outroChimeDelayMs ?? 400;
     await new Promise((res) => setTimeout(res, Math.max(150, outroDelay)));
+    if (seqId !== activeBellSequenceId) return;
 
     let targetOutroType: ChimeType = 'classic_3tone';
     let targetOutroCustomUrl = customOutroChimeUrl;
