@@ -1,7 +1,35 @@
 import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
-import { GoogleGenAI, Modality } from "@google/genai";
+import { GoogleGenAI, ThinkingLevel } from "@google/genai";
+
+// In-memory cache for synthesized voice TTS audio (sub-millisecond instant replay)
+const globalTtsAudioCache = new Map<string, string>();
+// In-memory cache for AI translations (id -> ar/en/jv)
+const globalTranslateCache = new Map<string, string>();
+
+function wrapPcmInWav(pcmBuffer: Buffer, sampleRate = 24000, numChannels = 1, bitsPerSample = 16): Buffer {
+  const byteRate = (sampleRate * numChannels * bitsPerSample) / 8;
+  const blockAlign = (numChannels * bitsPerSample) / 8;
+  const dataSize = pcmBuffer.length;
+  const header = Buffer.alloc(44);
+
+  header.write('RIFF', 0);
+  header.writeUInt32LE(36 + dataSize, 4);
+  header.write('WAVE', 8);
+  header.write('fmt ', 12);
+  header.writeUInt32LE(16, 16); // Subchunk1Size (16 for PCM)
+  header.writeUInt16LE(1, 20); // AudioFormat (1 = PCM)
+  header.writeUInt16LE(numChannels, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(byteRate, 28);
+  header.writeUInt16LE(blockAlign, 32);
+  header.writeUInt16LE(bitsPerSample, 34);
+  header.write('data', 36);
+  header.writeUInt32LE(dataSize, 40);
+
+  return Buffer.concat([header, pcmBuffer]);
+}
 
 async function startServer() {
   const app = express();
@@ -9,10 +37,80 @@ async function startServer() {
 
   app.use(express.json({ limit: "25mb" }));
 
+  // AI Translation Endpoint (Indonesian -> Arabic / English / Javanese) using gemini-4-hydrogen
+  app.post("/api/voice/translate", async (req, res) => {
+    try {
+      const { text, targetLanguage } = req.body || {};
+      if (!text || typeof text !== "string" || !text.trim()) {
+        return res.status(400).json({ error: "Teks sumber wajib diisi." });
+      }
+
+      const lang = targetLanguage === "ar" || targetLanguage === "en" || targetLanguage === "jv" ? targetLanguage : "id";
+      if (lang === "id") {
+        return res.json({ status: "success", translatedText: text.trim() });
+      }
+
+      const cacheKey = `${lang}:${text.trim()}`;
+      if (globalTranslateCache.has(cacheKey)) {
+        return res.json({
+          status: "success",
+          translatedText: globalTranslateCache.get(cacheKey),
+          cached: true,
+        });
+      }
+
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        return res.status(500).json({
+          error: "GEMINI_API_KEY belum terkonfigurasi di server.",
+        });
+      }
+
+      const ai = new GoogleGenAI({
+        apiKey,
+        httpOptions: {
+          headers: {
+            "User-Agent": "aistudio-build",
+          },
+        },
+      });
+
+      const languageInstructions: Record<"ar" | "en" | "jv", string> = {
+        ar: "Terjemahkan pengumuman bel sekolah berikut ke Bahasa Arab Fusha yang fasih, alami, dan sopan untuk siswa sekolah Islam. WAJIB sertakan harakat/tasykil lengkap (التشكيل الكامل) pada seluruh kata agar pembaca suara AI dapat melafalkannya dengan sangat tepat. Balas HANYA hasil terjemahan bahasa Arabnya saja tanpa penjelasan atau tanda kutip.",
+        en: "Terjemahkan pengumuman bel sekolah berikut ke Bahasa Inggris yang jelas, ramah, dan resmi untuk pengumuman sekolah. Balas HANYA hasil terjemahan bahasa Inggrisnya saja tanpa penjelasan atau tanda kutip.",
+        jv: "Terjemahkan pengumuman bel sekolah berikut ke Bahasa Jawa Krama Inggil / Krama Alus yang sopan, halus, dan alami untuk pengumuman siswa di sekolah Islam (gunakan ejaan alfabet Latin standar bahasa Jawa yang mudah dibaca jelas oleh pelafal suara). Balas HANYA hasil terjemahan bahasa Jawanya saja tanpa penjelasan atau tanda kutip.",
+      };
+
+      const response = await ai.models.generateContent({
+        model: "gemini-4-hydrogen",
+        contents: text.trim(),
+        config: {
+          systemInstruction: languageInstructions[lang],
+          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+        },
+      });
+
+      const translatedText = (response.text || "").trim().replace(/^["']|["']$/g, "");
+      if (!translatedText) {
+        throw new Error("AI tidak mengembalikan teks terjemahan.");
+      }
+
+      globalTranslateCache.set(cacheKey, translatedText);
+      return res.json({ status: "success", translatedText });
+    } catch (err: any) {
+      const errStr = typeof err === "string" ? err : err?.message || "";
+      console.warn("[Translate] Error:", errStr.slice(0, 120));
+      return res.status(500).json({
+        status: "error",
+        error: err?.message || "Gagal menerjemahkan teks dengan AI.",
+      });
+    }
+  });
+
   // AI Voice Cloning & TTS Generation Endpoint using Gemini API
   app.post("/api/voice/clone-tts", async (req, res) => {
     try {
-      const { text, sampleAudioDataUrl, voiceName, voiceDescription } = req.body;
+      const { text, sampleAudioDataUrl, voiceName, voiceDescription, language } = req.body;
       if (!text || typeof text !== "string") {
         return res.status(400).json({ error: "Text parameter is required" });
       }
@@ -33,70 +131,59 @@ async function startServer() {
         }
       });
 
-      let selectedVoice = voiceName || "Kore"; // Prebuilt voices: 'Kore', 'Puck', 'Fenrir', 'Zephyr', 'Aoede'
-      let analyzedToneStyle = voiceDescription || "";
+      // Prebuilt voices valid for gemini-3.8-flash-lite-tts: 'Kore', 'Puck', 'Fenrir', 'Zephyr', 'Charon'
+      const validVoices = ['Kore', 'Puck', 'Fenrir', 'Zephyr', 'Charon'];
+      const selectedVoice = voiceName && validVoices.includes(voiceName) ? voiceName : 'Fenrir';
+      const targetLang = language === 'ar' || language === 'en' || language === 'jv' ? language : 'id';
 
-      // Step 1: If audio sample is provided, analyze it using gemini-3.6-flash to extract voice profile & select best voice
-      if (sampleAudioDataUrl && typeof sampleAudioDataUrl === "string" && sampleAudioDataUrl.includes("base64,")) {
-        try {
-          const mimeType =
-            sampleAudioDataUrl.substring(
-              sampleAudioDataUrl.indexOf(":") + 1,
-              sampleAudioDataUrl.indexOf(";")
-            ) || "audio/webm";
-          const base64Data = sampleAudioDataUrl.split("base64,")[1];
+      // Check server memory cache for instant response (under 5ms)
+      const cacheKey = `${selectedVoice}:${targetLang}:${text.trim()}`;
+      if (globalTtsAudioCache.has(cacheKey)) {
+        return res.json({
+          status: "success",
+          audioDataUrl: globalTtsAudioCache.get(cacheKey),
+          cached: true
+        });
+      }
 
-          const analysisResponse = await ai.models.generateContent({
-            model: "gemini-3.6-flash",
-            contents: [
+      const styleMap: Record<string, string> = {
+        ar: "Clear, authoritative, warm male school announcer speaking fluent Standard Arabic with crisp articulation.",
+        en: "Clear, warm, authoritative male school announcer speaking fluent English.",
+        jv: "Clear, polite, warm male school announcer speaking fluent polite Javanese (Bahasa Jawa Krama) with natural Javanese pronunciation.",
+        id: "Clear, warm, authoritative male school announcer speaking fluent Indonesian.",
+      };
+
+      // Fast studio-quality TTS generation with gemini-3.8-flash-lite-tts
+      const ttsPromise = ai.models.generateContent({
+        model: 'gemini-3.8-flash-lite-tts',
+        contents: [
+          {
+            role: 'user',
+            parts: [
               {
-                inlineData: {
-                  mimeType: mimeType,
-                  data: base64Data
-                }
+                text: text.trim(),
+                speechMetadata: {
+                  style: styleMap[targetLang] || styleMap.id,
+                },
               },
-              {
-                text: `Analisis sampel suara audio ini. Tentukan gender pembicara (pria/wanita), intonasi (berwibawa/ramah/lembut), dan karakter vokal. Pilih satu nama voice terbaik dari [Kore, Puck, Fenrir, Zephyr, Aoede]. Jawab dalam format JSON: {"recommendedVoice": "Kore", "styleDescription": "pria berwibawa dengan intonasi jelas"}`
-              }
             ],
-            config: {
-              responseMimeType: "application/json"
-            }
-          });
-
-          if (analysisResponse.text) {
-            const parsed = JSON.parse(analysisResponse.text);
-            if (parsed.recommendedVoice && ["Kore", "Puck", "Fenrir", "Zephyr", "Aoede"].includes(parsed.recommendedVoice)) {
-              selectedVoice = parsed.recommendedVoice;
-            }
-            if (parsed.styleDescription) {
-              analyzedToneStyle = parsed.styleDescription;
-            }
-          }
-        } catch (analysisErr) {
-          console.warn("Audio voice analysis skipped/failed:", analysisErr);
-        }
-      }
-
-      // Step 2: Build Text-Only Prompt for gemini-3.1-flash-tts-preview (TTS model only accepts text input)
-      let ttsPrompt = "";
-      if (analyzedToneStyle) {
-        ttsPrompt += `Gaya dan karakter vokal pembaca: ${analyzedToneStyle}.\n\n`;
-      }
-      ttsPrompt += `Bacakan pesan bel sekolah berikut secara jelas, fasih, dan berwibawa dalam Bahasa Indonesia:\n"${text}"`;
-
-      const response = await ai.models.generateContent({
-        model: "gemini-3.1-flash-tts-preview",
-        contents: [{ text: ttsPrompt }],
+          },
+        ],
         config: {
-          responseModalities: [Modality.AUDIO],
+          responseModalities: ['AUDIO'],
           speechConfig: {
             voiceConfig: {
-              prebuiltVoiceConfig: { voiceName: selectedVoice }
-            }
-          }
-        }
+              prebuiltVoiceConfig: { voiceName: selectedVoice },
+            },
+          },
+        },
       });
+
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("Gemini TTS request timeout (8s)")), 8000)
+      );
+
+      const response = await Promise.race([ttsPromise, timeoutPromise]);
 
       const candidates = response.candidates;
       if (!candidates || candidates.length === 0) {
@@ -123,12 +210,50 @@ async function startServer() {
         throw new Error("Gemini TTS response did not return audio inline data");
       }
 
+      // Wrap raw headerless PCM in RIFF/WAVE if needed; never double-wrap valid RIFF WAV
+      const lowerMime = outputMimeType.toLowerCase();
+      const rawBuffer = Buffer.from(base64Audio, 'base64');
+      const hasRiffHeader = rawBuffer.length >= 4 && rawBuffer.toString('ascii', 0, 4) === 'RIFF';
+
+      if (!hasRiffHeader && (lowerMime.includes('pcm') || lowerMime.includes('l16') || lowerMime.includes('wav'))) {
+        const rateMatch = lowerMime.match(/rate=(\d+)/);
+        const sampleRate = rateMatch ? parseInt(rateMatch[1], 10) : 24000;
+        const wavBuffer = wrapPcmInWav(rawBuffer, sampleRate, 1, 16);
+        base64Audio = wavBuffer.toString('base64');
+        outputMimeType = 'audio/wav';
+      } else if (hasRiffHeader) {
+        outputMimeType = 'audio/wav';
+      }
+
       const audioDataUrl = `data:${outputMimeType};base64,${base64Audio}`;
+      
+      // Store in memory cache
+      globalTtsAudioCache.set(cacheKey, audioDataUrl);
+
       return res.json({ status: "success", audioDataUrl });
     } catch (err: any) {
-      console.error("Error in /api/voice/clone-tts:", err);
-      return res.status(500).json({
-        error: err.message || "Failed to generate AI cloned TTS audio"
+      const errStr = typeof err === "string" ? err : (err?.message || JSON.stringify(err || ""));
+      const isQuotaExceeded =
+        err?.status === 429 ||
+        err?.code === 429 ||
+        errStr.includes("429") ||
+        errStr.includes("RESOURCE_EXHAUSTED") ||
+        errStr.includes("Quota exceeded") ||
+        errStr.includes("quota");
+
+      if (isQuotaExceeded) {
+        return res.json({
+          status: "quota_exceeded",
+          quotaExceeded: true,
+          message: "Gemini TTS daily quota limit reached (Free Tier). Seamless local browser speech active."
+        });
+      }
+
+      console.log("[TTS] Note: AI generation fallback to local engine:", err?.message?.slice(0, 100) || "Service unavailable");
+      return res.status(200).json({
+        status: "fallback",
+        quotaExceeded: false,
+        error: err?.message || "Failed to generate AI cloned TTS audio"
       });
     }
   });
@@ -161,6 +286,107 @@ async function startServer() {
       }),
       serverOffsetMs: 0
     });
+  });
+
+  // Cloud Audio Proxy endpoint for Google Drive, Dropbox, and external links (handles redirects & CORS)
+  app.get("/api/audio/proxy", async (req, res) => {
+    try {
+      const rawUrl = typeof req.query.url === "string" ? req.query.url.trim() : "";
+      if (!rawUrl || (!rawUrl.startsWith("http://") && !rawUrl.startsWith("https://"))) {
+        return res.status(400).json({ error: "URL audio tidak valid." });
+      }
+
+      let parsed: URL;
+      try {
+        parsed = new URL(rawUrl);
+      } catch {
+        return res.status(400).json({ error: "Format URL tidak valid." });
+      }
+
+      const host = parsed.hostname.toLowerCase();
+      if (
+        host === "localhost" ||
+        host === "127.0.0.1" ||
+        host === "::1" ||
+        host.startsWith("10.") ||
+        host.startsWith("192.168.") ||
+        host.startsWith("169.254.")
+      ) {
+        return res.status(403).json({ error: "Akses ke alamat lokal tidak diizinkan." });
+      }
+
+      let targetUrl = rawUrl;
+      // Handle Google Drive file URLs -> direct usercontent download link
+      if (host.includes("drive.google.com")) {
+        const idMatch = rawUrl.match(/\/d\/([a-zA-Z0-9_-]+)/) || rawUrl.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+        if (idMatch && idMatch[1]) {
+          targetUrl = `https://drive.usercontent.google.com/download?id=${idMatch[1]}&export=download&confirm=t`;
+        }
+      }
+
+      const fetchAudio = async (urlToFetch: string) =>
+        fetch(urlToFetch, {
+          redirect: "follow",
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            Accept: "audio/*,*/*;q=0.9",
+          },
+        });
+
+      let upstream = await fetchAudio(targetUrl);
+      let contentType = (upstream.headers.get("content-type") || "").toLowerCase();
+
+      // If Google Drive returned an HTML confirmation page, extract the download form or confirm link
+      if (upstream.ok && contentType.includes("text/html") && (host.includes("drive.google.com") || host.includes("googleusercontent.com"))) {
+        const html = await upstream.text();
+        const uuidMatch = html.match(/name="uuid"\s+value="([^"]+)"/);
+        const idMatch = rawUrl.match(/\/d\/([a-zA-Z0-9_-]+)/) || rawUrl.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+        if (idMatch && idMatch[1]) {
+          const confirmUrl = uuidMatch
+            ? `https://drive.usercontent.google.com/download?id=${idMatch[1]}&export=download&confirm=t&uuid=${uuidMatch[1]}`
+            : `https://drive.google.com/uc?export=download&confirm=t&id=${idMatch[1]}`;
+          upstream = await fetchAudio(confirmUrl);
+          contentType = (upstream.headers.get("content-type") || "").toLowerCase();
+        }
+      }
+
+      if (!upstream.ok) {
+        return res.status(502).json({
+          error: `Gagal mengambil file audio dari server sumber (HTTP ${upstream.status}).`,
+        });
+      }
+
+      if (contentType.includes("text/html")) {
+        return res.status(422).json({
+          error:
+            "Tautan mengarah ke halaman web/HTML (kemungkinan file Google Drive masih Privat). Ubah akses berbagi menjadi 'Siapa saja yang memiliki link'.",
+        });
+      }
+
+      const arrayBuf = await upstream.arrayBuffer();
+      const buffer = Buffer.from(arrayBuf);
+      if (buffer.byteLength === 0) {
+        return res.status(422).json({ error: "File audio dari tautan kosong (0 byte)." });
+      }
+      if (buffer.byteLength > 25 * 1024 * 1024) {
+        return res.status(413).json({ error: "Ukuran file audio terlalu besar (maksimal 25MB)." });
+      }
+
+      const safeContentType =
+        !contentType || contentType === "application/octet-stream" || contentType === "binary/octet-stream"
+          ? "audio/mpeg"
+          : contentType;
+
+      res.setHeader("Content-Type", safeContentType);
+      res.setHeader("Content-Length", buffer.byteLength.toString());
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Cache-Control", "public, max-age=3600");
+      return res.send(buffer);
+    } catch (err: any) {
+      return res.status(500).json({
+        error: err?.message || "Gagal memuat audio dari tautan eksternal.",
+      });
+    }
   });
 
   // Health check endpoint

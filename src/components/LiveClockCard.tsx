@@ -8,6 +8,8 @@ import {
   Zap,
   Activity,
   CheckCircle2,
+  ChevronDown,
+  VolumeX,
 } from 'lucide-react';
 import { DayOfWeek, TimeSyncInfo, ScheduleItem } from '../types';
 import { getIndonesianDayName } from '../utils/timeSync';
@@ -21,6 +23,8 @@ interface LiveClockCardProps {
   onManualSync: () => void;
   nextScheduleItem: ScheduleItem | null;
   countdownSeconds: number | null;
+  disabledDays?: DayOfWeek[];
+  onToggleDisabledDay?: (day: DayOfWeek) => void;
 }
 
 export const LiveClockCard: React.FC<LiveClockCardProps> = ({
@@ -32,6 +36,8 @@ export const LiveClockCard: React.FC<LiveClockCardProps> = ({
   onManualSync,
   nextScheduleItem,
   countdownSeconds,
+  disabledDays = [0],
+  onToggleDisabledDay,
 }) => {
   const daysList: { num: DayOfWeek; name: string }[] = [
     { num: 1, name: 'Senin' },
@@ -40,7 +46,10 @@ export const LiveClockCard: React.FC<LiveClockCardProps> = ({
     { num: 4, name: 'Kamis' },
     { num: 5, name: 'Jumat' },
     { num: 6, name: 'Sabtu' },
+    { num: 0, name: 'Minggu' },
   ];
+
+  const isTodayDisabled = disabledDays.includes(todayDayNumber);
 
   const formattedHours = String(currentTime.getHours()).padStart(2, '0');
   const formattedMinutes = String(currentTime.getMinutes()).padStart(2, '0');
@@ -54,7 +63,7 @@ export const LiveClockCard: React.FC<LiveClockCardProps> = ({
   });
 
   const formatCountdown = (secs: number | null) => {
-    if (secs === null || secs < 0) return 'Tidak ada jadwal tersisa hari ini';
+    if (secs === null || secs < 0) return 'Tidak ada jadwal bel tersisa hari ini';
     const h = Math.floor(secs / 3600);
     const m = Math.floor((secs % 3600) / 60);
     const s = secs % 60;
@@ -63,186 +72,236 @@ export const LiveClockCard: React.FC<LiveClockCardProps> = ({
     return `${s} detik lagi!`;
   };
 
+  const scrollToSchedule = () => {
+    const el = document.getElementById('jadwal-pelajaran-section');
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth' });
+    }
+  };
+
   return (
-    <div className="space-y-6">
-      {/* Main Top Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left: Giant Digital Clock Card */}
-        <div className="lg:col-span-7 bg-gradient-to-br from-slate-900 via-slate-900 to-emerald-950/80 border border-emerald-500/30 rounded-3xl p-6 sm:p-8 shadow-2xl relative overflow-hidden flex flex-col justify-between">
-          {/* Background Glow Accents */}
-          <div className="absolute -top-24 -right-24 w-64 h-64 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none"></div>
-          <div className="absolute -bottom-24 -left-24 w-64 h-64 bg-teal-500/10 rounded-full blur-3xl pointer-events-none"></div>
+    <div className="space-y-4 sm:space-y-5">
+      {/* Hero Viewport Section: Huge Clock + Next Bell (Lifted higher so both fit on screen) */}
+      <section className="flex flex-col gap-3 sm:gap-3.5">
+        {/* Top Header & Giant Clock Container */}
+        <div className="bg-white border border-blue-100 rounded-3xl p-4 sm:p-6 shadow-[0_8px_30px_rgba(30,58,138,0.05)] relative overflow-hidden flex flex-col justify-between">
+          {/* Subtle Ambient Light Glows */}
+          <div className="absolute -top-32 -right-32 w-80 h-80 bg-blue-100/40 rounded-full blur-3xl pointer-events-none" />
+          <div className="absolute -bottom-32 -left-32 w-80 h-80 bg-indigo-50/60 rounded-full blur-3xl pointer-events-none" />
 
-          <div>
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping"></span>
-                <span className="text-xs font-extrabold tracking-wider uppercase text-emerald-400 bg-emerald-900/40 px-3 py-1 rounded-full border border-emerald-500/30 flex items-center gap-1.5">
-                  <Activity className="w-3.5 h-3.5" />
-                  Jam Server Presisi
-                </span>
-              </div>
-
-              <button
-                onClick={onManualSync}
-                className="flex items-center gap-1.5 text-xs font-semibold text-slate-300 hover:text-white bg-slate-800/80 hover:bg-slate-700 px-3 py-1.5 rounded-lg transition-all border border-slate-700 cursor-pointer"
-                title="Sinkronkan dengan Server API"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 text-emerald-400 ${timeSyncInfo.status === 'syncing' ? 'animate-spin' : ''}`} />
-                <span>Sinkron API</span>
-              </button>
-            </div>
-
-            {/* Giant Time Display */}
-            <div className="my-2 text-center sm:text-left">
-              <div className="inline-flex items-baseline font-mono tracking-tight font-black text-white text-5xl sm:text-7xl lg:text-8xl drop-shadow-md">
-                <span>{formattedHours}</span>
-                <span className="text-emerald-400 animate-pulse mx-1">:</span>
-                <span>{formattedMinutes}</span>
-                <span className="text-emerald-400 animate-pulse mx-1">:</span>
-                <span className="text-amber-400 text-4xl sm:text-6xl lg:text-7xl">{formattedSeconds}</span>
-                <span className="text-xs sm:text-sm font-sans font-bold text-slate-400 ml-3">WIB</span>
-              </div>
-
-              {/* Date String */}
-              <div className="flex items-center gap-2 mt-3 text-slate-300 text-sm sm:text-base font-medium">
-                <Calendar className="w-4 h-4 text-emerald-400" />
-                <span>{formattedDate}</span>
-                <span className="text-xs bg-slate-800 text-slate-300 px-2 py-0.5 rounded border border-slate-700 font-mono">
-                  Waktu Real-Time
-                </span>
-              </div>
-            </div>
-          </div>
-
-          {/* Sync status footer inside clock card */}
-          <div className="mt-6 pt-4 border-t border-slate-800/80 flex flex-wrap items-center justify-between text-xs text-slate-400 gap-2">
+          {/* Clock Header Bar */}
+          <div className="relative z-10 flex items-center justify-between pb-2.5 border-b border-slate-100 mb-2 sm:mb-3">
             <div className="flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping" />
+              <span className="text-[11px] sm:text-xs font-black tracking-wider uppercase text-blue-700 bg-blue-50 px-2.5 py-0.5 rounded-full border border-blue-200/90 flex items-center gap-1.5 shadow-2xs">
+                <Activity className="w-3.5 h-3.5 text-blue-600" />
+                Jam Server Presisi Real-Time
+              </span>
+            </div>
+
+            <button
+              onClick={onManualSync}
+              className="flex items-center gap-1.5 text-xs font-bold text-slate-700 hover:text-blue-700 bg-slate-50 hover:bg-blue-50 px-2.5 py-1 rounded-xl transition-all border border-slate-200 hover:border-blue-300 cursor-pointer shadow-xs active:scale-95"
+              title="Sinkronkan Jam dengan Server"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 text-blue-600 ${timeSyncInfo.status === 'syncing' ? 'animate-spin' : ''}`} />
+              <span>Sinkron API</span>
+            </button>
+          </div>
+
+          {/* Giant Time Digits Display (Dominant & Majestic, Lifted Higher) */}
+          <div className="relative z-10 my-1 sm:my-3 text-center flex flex-col items-center justify-center">
+            <div className="inline-flex items-baseline font-mono tracking-tighter font-black text-slate-900 text-6xl sm:text-7xl md:text-8xl lg:text-9xl drop-shadow-xs select-none leading-none">
+              <span className="hover:text-blue-600 transition-colors">{formattedHours}</span>
+              <span className="text-blue-600 animate-pulse mx-1 sm:mx-2">:</span>
+              <span className="hover:text-blue-600 transition-colors">{formattedMinutes}</span>
+              <span className="text-blue-600 animate-pulse mx-1 sm:mx-2">:</span>
+              <span className="text-amber-500 hover:text-amber-600 transition-colors text-5xl sm:text-6xl md:text-7xl lg:text-8xl">
+                {formattedSeconds}
+              </span>
+              <span className="text-xs sm:text-base font-sans font-black text-blue-700 ml-2 sm:ml-3 bg-blue-50 px-2 sm:px-3 py-0.5 rounded-xl border border-blue-200 shadow-2xs align-middle">
+                WIB
+              </span>
+            </div>
+
+            {/* Date and Location Badge */}
+            <div className="flex flex-wrap items-center justify-center gap-2 mt-2 sm:mt-3 text-slate-600 text-xs sm:text-sm font-bold">
+              <Calendar className="w-4 h-4 text-blue-600" />
+              <span>{formattedDate}</span>
+              <span className="text-[11px] bg-slate-100 text-slate-700 px-2 py-0.5 rounded-lg border border-slate-200 font-mono">
+                SD QUR'AN UNGGULAN
+              </span>
+            </div>
+          </div>
+
+          {/* Server API Precision Info Footer */}
+          <div className="relative z-10 pt-2.5 border-t border-slate-100 flex flex-wrap items-center justify-between text-[11px] sm:text-xs text-slate-500 gap-2 mt-1 sm:mt-2">
+            <div className="flex items-center gap-1.5">
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
               <span>
-                Status: <strong className="text-slate-200">{timeSyncInfo.source}</strong>
+                Sumber Waktu: <strong className="text-slate-800">{timeSyncInfo.source}</strong>
               </span>
             </div>
-            <div className="font-mono text-emerald-300/80 bg-slate-900/80 px-2.5 py-1 rounded-md border border-slate-800">
-              Offset: {timeSyncInfo.offsetMs} ms • Latensi: {timeSyncInfo.latencyMs} ms
+            <div className="font-mono text-[11px] text-blue-800 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-100 font-semibold">
+              Offset: {timeSyncInfo.offsetMs >= 0 ? `+${timeSyncInfo.offsetMs}` : timeSyncInfo.offsetMs} ms • Latensi: {timeSyncInfo.latencyMs} ms
             </div>
           </div>
         </div>
 
-        {/* Right: Next Bell Countdown Card */}
-        <div className="lg:col-span-5 bg-gradient-to-br from-amber-950/60 via-slate-900 to-slate-900 border border-amber-500/30 rounded-3xl p-6 shadow-2xl flex flex-col justify-between relative overflow-hidden">
-          <div className="absolute top-0 right-0 p-8 opacity-10 text-amber-400 pointer-events-none">
-            <Bell className="w-32 h-32" />
-          </div>
-
-          <div>
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2 text-amber-400 font-bold text-xs uppercase tracking-wider bg-amber-500/10 px-3 py-1 rounded-full border border-amber-500/30">
-                <Zap className="w-3.5 h-3.5" />
-                <span>Bel Sekolah Berikutnya</span>
+        {/* Bel Sekolah Berikutnya Card (Subordinate, Fully Visible, Clean) */}
+        <div className="bg-gradient-to-r from-amber-50/80 via-white to-amber-50/50 border border-amber-200 rounded-2xl p-3.5 sm:p-4 shadow-sm relative overflow-hidden">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-amber-500 to-orange-500 text-white font-black font-mono text-base flex items-center justify-center shrink-0 shadow-md shadow-amber-500/20">
+                {nextScheduleItem ? nextScheduleItem.time : '--:--'}
               </div>
-              <span className="text-xs text-amber-200/70 font-mono bg-slate-800 px-2 py-0.5 rounded">
-                Hari Ini ({getIndonesianDayName(todayDayNumber)})
-              </span>
-            </div>
 
-            {nextScheduleItem ? (
-              <div className="space-y-4">
-                <div className="flex items-start gap-4">
-                  <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-amber-400 to-orange-500 text-slate-950 font-black flex flex-col items-center justify-center shrink-0 shadow-lg shadow-amber-500/20 font-mono text-lg">
-                    {nextScheduleItem.time}
-                  </div>
-
-                  <div>
-                    <h3 className="text-lg sm:text-xl font-black text-white leading-snug">
-                      {nextScheduleItem.label}
-                    </h3>
-                    <p className="text-xs text-amber-200/80 mt-1 line-clamp-2 italic">
-                      "{nextScheduleItem.speechText}"
-                    </p>
-                  </div>
-                </div>
-
-                {/* Countdown display */}
-                <div className="bg-slate-950/80 rounded-2xl p-4 border border-amber-500/20 text-center">
-                  <div className="text-xs text-slate-400 font-medium mb-1">
-                    Hitung Mundur Bunyi Bel:
-                  </div>
-                  <div className="text-2xl sm:text-3xl font-black text-amber-400 font-mono tracking-tight animate-pulse">
-                    {formatCountdown(countdownSeconds)}
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="py-8 text-center space-y-2">
-                <div className="w-12 h-12 rounded-full bg-slate-800 text-slate-400 flex items-center justify-center mx-auto">
-                  <Clock className="w-6 h-6" />
-                </div>
-                <h4 className="text-base font-bold text-white">Semua Bel Hari Ini Telah Selesai</h4>
-                <p className="text-xs text-slate-400 max-w-xs mx-auto">
-                  Semua jadwal bel untuk hari {getIndonesianDayName(todayDayNumber)} telah berbunyi. Sistem siap untuk besok.
-                </p>
-              </div>
-            )}
-          </div>
-
-          <div className="mt-4 pt-3 border-t border-slate-800 flex items-center justify-between text-xs text-slate-400">
-            <span className="flex items-center gap-1">
-              <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-              SD QUR'AN UNGGULAN
-            </span>
-            <span className="text-amber-300 font-medium">Auto-Trigger System</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Day Selector Pills */}
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-lg">
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-3">
-          <div className="flex items-center gap-2">
-            <Calendar className="w-4 h-4 text-emerald-400" />
-            <span className="text-xs sm:text-sm font-extrabold text-white uppercase tracking-wider">
-              PILIH PRATINJAU HARI JADWAL:
-            </span>
-          </div>
-          <span className="text-xs text-slate-400">
-            Hari ini:{' '}
-            <strong className="text-emerald-400 font-bold">
-              {getIndonesianDayName(todayDayNumber)}
-            </strong>
-          </span>
-        </div>
-
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2">
-          {daysList.map((day) => {
-            const isToday = day.num === todayDayNumber;
-            const isSelected = day.num === selectedDay;
-
-            return (
-              <button
-                key={day.num}
-                onClick={() => setSelectedDay(day.num)}
-                className={`px-4 py-3 rounded-xl text-xs sm:text-sm font-bold transition-all relative flex items-center justify-between cursor-pointer ${
-                  isSelected
-                    ? 'bg-gradient-to-r from-emerald-500 to-teal-500 text-slate-950 shadow-md shadow-emerald-500/20 scale-[1.02]'
-                    : 'bg-slate-800/80 hover:bg-slate-800 text-slate-300 border border-slate-700/60'
-                }`}
-              >
-                <span>{day.name}</span>
-                {isToday && (
-                  <span
-                    className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${
-                      isSelected
-                        ? 'bg-slate-950 text-emerald-300'
-                        : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
-                    }`}
-                  >
-                    Hari Ini
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-black uppercase tracking-wider text-amber-800 bg-amber-100/90 px-2 py-0.5 rounded-full border border-amber-200">
+                    Bel Sekolah Berikutnya
                   </span>
-                )}
-              </button>
-            );
-          })}
+                  <span className="text-[10px] text-slate-500 font-semibold">
+                    Hari Ini ({getIndonesianDayName(todayDayNumber)})
+                  </span>
+                </div>
+                <h3 className="text-xs sm:text-sm font-black text-slate-900 truncate mt-0.5">
+                  {isTodayDisabled
+                    ? `Hari ${getIndonesianDayName(todayDayNumber)} Dinonaktifkan (Mode Libur)`
+                    : nextScheduleItem
+                    ? nextScheduleItem.label
+                    : 'Semua Jadwal Bel Hari Ini Telah Berbunyi'}
+                </h3>
+              </div>
+            </div>
+
+            {/* Countdown Box */}
+            <div className="w-full sm:w-auto bg-amber-100/70 border border-amber-200 rounded-xl px-3.5 py-1.5 text-center shrink-0">
+              <span className="text-[9px] font-bold text-amber-800 block uppercase tracking-wider">
+                {isTodayDisabled ? 'Status Hari Ini:' : 'Hitung Mundur:'}
+              </span>
+              <span className="text-sm sm:text-base font-black text-amber-700 font-mono">
+                {isTodayDisabled ? 'Bel & Murottal Mati Otomatis' : formatCountdown(countdownSeconds)}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Scroll Cue to Reveal Schedule Below the Fold */}
+        <div className="pt-1 pb-1 text-center">
+          <button
+            onClick={scrollToSchedule}
+            className="inline-flex items-center gap-1.5 text-[11px] font-bold text-slate-500 hover:text-blue-700 bg-white hover:bg-blue-50 px-3.5 py-1.5 rounded-full border border-slate-200 hover:border-blue-300 shadow-2xs transition-all cursor-pointer"
+          >
+            <span>Gulir ke bawah untuk melihat tabel jadwal pelajaran</span>
+            <ChevronDown className="w-3.5 h-3.5 text-blue-600 animate-bounce" />
+          </button>
+        </div>
+      </section>
+
+      {/* Target Section (Reached via scroll down): Day Selector & Schedules */}
+      <div id="jadwal-pelajaran-section" className="pt-2">
+        {/* Day Selector Bar */}
+        <div className="bg-white border border-blue-100 rounded-3xl p-4 shadow-[0_4px_20px_rgb(0,0,0,0.03)]">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 mb-2.5">
+            <div className="flex items-center gap-1.5">
+              <Calendar className="w-4 h-4 text-blue-600" />
+              <span className="text-xs font-black text-slate-900 tracking-wider">
+                PILIH HARI JADWAL PELAJARAN:
+              </span>
+            </div>
+            <span className="text-xs text-slate-500 font-medium">
+              Hari ini:{' '}
+              <strong className="text-blue-700 font-bold bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
+                {getIndonesianDayName(todayDayNumber)}
+              </strong>
+            </span>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2">
+            {daysList.map((day) => {
+              const isToday = day.num === todayDayNumber;
+              const isSelected = day.num === selectedDay;
+              const isDayOff = disabledDays.includes(day.num);
+
+              return (
+                <button
+                  key={day.num}
+                  onClick={() => setSelectedDay(day.num)}
+                  className={`px-3 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all relative flex items-center justify-between gap-1 cursor-pointer ${
+                    isSelected
+                      ? isDayOff
+                        ? 'bg-slate-700 text-white shadow-md scale-[1.02]'
+                        : 'bg-blue-600 text-white shadow-md shadow-blue-500/25 scale-[1.02]'
+                      : isDayOff
+                      ? 'bg-rose-50/60 hover:bg-rose-50 text-rose-800 border border-rose-200'
+                      : 'bg-slate-50 hover:bg-blue-50/70 text-slate-700 border border-slate-200/80 hover:border-blue-200'
+                  }`}
+                >
+                  <span>{day.name}</span>
+                  <div className="flex items-center gap-1 shrink-0">
+                    {isDayOff && (
+                      <span
+                        className={`text-[9px] px-1.5 py-0.5 rounded-full font-black ${
+                          isSelected
+                            ? 'bg-rose-500 text-white'
+                            : 'bg-rose-100 text-rose-700 border border-rose-200'
+                        }`}
+                      >
+                        Off
+                      </span>
+                    )}
+                    {isToday && (
+                      <span
+                        className={`text-[9px] px-1.5 py-0.5 rounded-full font-black ${
+                          isSelected
+                            ? 'bg-white text-blue-700'
+                            : 'bg-blue-100 text-blue-700 border border-blue-200'
+                        }`}
+                      >
+                        Hari Ini
+                      </span>
+                    )}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Weekend Auto-Silence Control (Sabtu & Minggu) */}
+          {onToggleDisabledDay && (
+            <div className="mt-3 pt-3 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+              <div className="flex items-center gap-1.5 text-slate-600">
+                <VolumeX className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+                <span>
+                  <strong className="text-slate-800">Mode Hari Libur:</strong> Hari yang dinonaktifkan otomatis mematikan <strong>Bel &amp; Murottal</strong> meski PC hidup 24 jam.
+                </span>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                {[
+                  { num: 6 as DayOfWeek, label: 'Sabtu' },
+                  { num: 0 as DayOfWeek, label: 'Minggu' },
+                ].map((wk) => {
+                  const isOff = disabledDays.includes(wk.num);
+                  return (
+                    <button
+                      key={wk.num}
+                      type="button"
+                      onClick={() => onToggleDisabledDay(wk.num)}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all cursor-pointer flex items-center gap-1.5 ${
+                        isOff
+                          ? 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
+                          : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+                      }`}
+                    >
+                      <span className={`w-2 h-2 rounded-full ${isOff ? 'bg-rose-500' : 'bg-emerald-500'}`} />
+                      <span>{wk.label}: {isOff ? 'Nonaktif (Mati)' : 'Aktif'}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

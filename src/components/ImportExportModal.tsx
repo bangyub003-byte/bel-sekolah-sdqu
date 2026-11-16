@@ -54,82 +54,72 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto">
-      <div className="bg-slate-900 border border-slate-800 w-full max-w-2xl rounded-3xl shadow-2xl overflow-hidden my-8 space-y-5 p-6">
-        <div className="flex items-center justify-between pb-4 border-b border-slate-800">
+    <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+      <div className="bg-white border border-blue-100 w-full max-w-2xl rounded-3xl shadow-2xl overflow-hidden my-8 space-y-5 p-6 sm:p-7">
+        <div className="flex items-center justify-between pb-4 border-b border-slate-100">
           <div className="flex items-center gap-2">
-            <Sparkles className="w-5 h-5 text-emerald-400" />
-            <h3 className="text-xl font-black text-white">Ekspor / Impor Jadwal Bel JSON</h3>
+            <Sparkles className="w-5 h-5 text-blue-600" />
+            <h3 className="text-lg font-black text-slate-900">
+              Cadangkan & Impor Jadwal Bel (JSON)
+            </h3>
           </div>
           <button
             onClick={onClose}
-            className="w-8 h-8 rounded-full bg-slate-800 text-slate-300 hover:text-white flex items-center justify-center transition-all cursor-pointer"
+            className="text-slate-400 hover:text-slate-600 p-1 rounded-lg cursor-pointer"
           >
-            <X className="w-4 h-4" />
+            <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* Export Section */}
+        {/* Section 1: Ekspor */}
         <div className="space-y-3">
-          <h4 className="text-sm font-bold text-emerald-400 uppercase tracking-wider">
-            1. Ekspor Cadangan Jadwal Saat Ini
-          </h4>
+          <label className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
+            1. Salin / Cadangkan Jadwal Aktif
+          </label>
           <div className="flex flex-wrap items-center gap-2">
             <button
-              onClick={handleDownloadJSON}
-              className="bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold px-4 py-2 rounded-xl text-xs flex items-center gap-2 transition-all cursor-pointer"
-            >
-              <Download className="w-4 h-4" />
-              <span>Unduh File .JSON</span>
-            </button>
-
-            <button
               onClick={handleCopyJSON}
-              className="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer"
+              className="bg-blue-600 hover:bg-blue-700 text-white font-bold px-4 py-2 rounded-xl text-xs flex items-center gap-1.5 shadow-sm shadow-blue-500/20 cursor-pointer"
             >
-              {copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
-              <span>{copied ? 'Tersalin!' : 'Salin Teks JSON'}</span>
+              {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+              <span>{copied ? 'Tersalin ke Clipboard!' : 'Salin Semua JSON'}</span>
+            </button>
+            <button
+              onClick={handleDownloadJSON}
+              className="bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+            >
+              <Download className="w-3.5 h-3.5 text-blue-600" />
+              <span>Unduh File .JSON</span>
             </button>
           </div>
         </div>
 
-        {/* Import Section */}
-        <div className="space-y-3 pt-4 border-t border-slate-800">
-          <h4 className="text-sm font-bold text-amber-400 uppercase tracking-wider">
-            2. Impor / Timpa Jadwal Dari Teks JSON
-          </h4>
-          <p className="text-xs text-slate-400">
-            Tempelkan struktur kode JSON jadwal bel baru di kotak di bawah ini untuk memuat konfigurasi:
-          </p>
-
+        {/* Section 2: Impor */}
+        <div className="space-y-3 pt-3 border-t border-slate-100">
+          <label className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
+            2. Tempel JSON Cadangan untuk Memulihkan
+          </label>
           <textarea
             rows={5}
+            placeholder="Tempel format JSON jadwal di sini..."
             value={jsonText}
             onChange={(e) => setJsonText(e.target.value)}
-            placeholder="Tempel teks JSON jadwal bel di sini..."
-            className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs font-mono text-emerald-300 placeholder-slate-600 focus:outline-none focus:border-amber-500"
+            className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs font-mono text-slate-900 placeholder-slate-400 focus:outline-hidden focus:border-blue-500 focus:bg-white"
           />
-
           {errorMsg && (
-            <div className="text-xs text-rose-400 bg-rose-950/40 p-2.5 rounded-lg border border-rose-500/30">
+            <p className="text-xs text-rose-600 font-bold bg-rose-50 p-2 rounded-lg border border-rose-200">
               {errorMsg}
-            </div>
+            </p>
           )}
 
-          <div className="flex justify-end gap-3 pt-2">
-            <button
-              onClick={onClose}
-              className="px-4 py-2 rounded-xl text-xs font-bold text-slate-300 bg-slate-800 hover:bg-slate-700 cursor-pointer"
-            >
-              Batal
-            </button>
+          <div className="flex justify-end pt-2">
             <button
               onClick={handleApplyImport}
               disabled={!jsonText.trim()}
-              className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold px-5 py-2 rounded-xl text-xs flex items-center gap-2 disabled:opacity-50 transition-all cursor-pointer"
+              className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold px-5 py-2.5 rounded-xl text-xs flex items-center gap-2 shadow-sm shadow-emerald-500/20 cursor-pointer"
             >
               <Upload className="w-4 h-4" />
-              <span>Terapkan Impor Jadwal</span>
+              <span>Terapkan & Pulihkan Jadwal Ini</span>
             </button>
           </div>
         </div>

@@ -22,6 +22,7 @@ import {
   Info,
   Check,
   Smartphone,
+  Globe,
 } from 'lucide-react';
 import { AudioSettings, CustomChime, BuiltinChimeType, ChimeType } from '../types';
 import { playChimeTone, playCustomAudio, playBellSequence } from '../utils/audioSynth';
@@ -31,6 +32,7 @@ import {
   processAudioFile,
   getAudioFormatLabel,
 } from '../utils/audioFileUtils';
+import { normalizeAudioCloudUrl, isCloudAudioUrl, uploadAudioToCloudinary } from '../utils/cloudAudioUtils';
 
 interface ChimeManagerProps {
   settings: AudioSettings;
@@ -44,7 +46,8 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
   onLogBell,
 }) => {
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<'upload' | 'record'>('upload');
+  const [activeTab, setActiveTab] = useState<'upload' | 'record' | 'url'>('upload');
+  const [cloudUrlInput, setCloudUrlInput] = useState('');
 
   // Form State
   const [chimeName, setChimeName] = useState('');
@@ -71,12 +74,8 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
   const [selectedChimeForTest, setSelectedChimeForTest] = useState<ChimeType>(
     settings.defaultChimeId || 'westminster'
   );
-  const [selectedOutroForTest, setSelectedOutroForTest] = useState<ChimeType | 'none' | 'same_as_intro'>(
-    settings.globalOutroChimeType || 'classic_3tone'
-  );
-  const [enableOutroForTest, setEnableOutroForTest] = useState<boolean>(
-    settings.enableGlobalOutroChime ?? true
-  );
+  const [selectedOutroForTest, setSelectedOutroForTest] = useState<ChimeType | 'none' | 'same_as_intro'>('none');
+  const [enableOutroForTest, setEnableOutroForTest] = useState<boolean>(false);
 
   const customChimes = settings.customChimes || [];
   const defaultChimeId = settings.defaultChimeId;
@@ -98,33 +97,45 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
   const builtinChimes: { id: BuiltinChimeType; name: string; desc: string; category: string }[] = [
     {
       id: 'westminster',
-      name: 'Westminster Quarters (4-Nada Klasik)',
-      desc: 'Melodi klasik lonceng 4 nada (E-C-D-G), standar internasional bel sekolah.',
-      category: 'Klasik',
+      name: 'Westminster 8-Tone Chime (6.8s - Bel Masuk)',
+      desc: 'Melodi lonceng 8 nada Westminster (durasi 6.8 detik), standar internasional bel masuk sekolah terdengar agung & jelas.',
+      category: 'Masuk & Pelajaran',
     },
     {
       id: 'classic_3tone',
-      name: '3-Tone Ascending (Do-Mi-Sol)',
-      desc: 'Nada harmonis ceria menaik 3 ketuk untuk pergantian jam pelajaran.',
-      category: 'Harmoni',
+      name: '6-Tone Ascending Chime (5.8s - Ganti Jam)',
+      desc: 'Melodi tangga nada ceria 6 ketuk Do-Mi-Sol (durasi 5.8 detik) untuk tanda pergantian jam pelajaran murid.',
+      category: 'Harmoni & Jam Baru',
     },
     {
       id: 'tube_chime',
-      name: '2-Tone Tube Chime (Hangat & Lembut)',
-      desc: 'Dua nada resonansi tabung yang tenang untuk jam istirahat dan perpustakaan.',
-      category: 'Modern',
+      name: 'Tubular Chime Lembut (5.8s - Istirahat)',
+      desc: 'Resonansi lonceng tabung akustik 4 ketuk lembut (durasi 5.8 detik) untuk waktu istirahat dan perpustakaan.',
+      category: 'Istirahat & Tenang',
     },
     {
       id: 'islamic_duo',
-      name: 'Melodi Islami (Akrab & Teduh)',
-      desc: 'Susunan tangga nada khas yang menenangkan untuk panggilan sholat dan tilawah.',
-      category: 'Islami',
+      name: 'Melodi Islami Maqam (6.2s - Sholat/Tilawah)',
+      desc: 'Harmoni nada syahdu Islami 5 ketuk (durasi 6.2 detik) untuk waktu tahfidz, dzuhur berjamaah, dan murottal.',
+      category: 'Islami & Sholat',
+    },
+    {
+      id: 'school_dismissal',
+      name: 'Melodi Pulang Ceria (6.2s - Siswa Senang)',
+      desc: 'Fanfare lonceng riang 8 ketukan kepulangan sekolah (durasi 6.2 detik) membuat murid senang menyambut waktu pulang.',
+      category: 'Pulang Sekolah',
     },
     {
       id: 'electric_bell',
-      name: 'Bel Listrik Sekolah (Ringing Bell)',
-      desc: 'Suara getaran bel listrik mekanik tradisional untuk tanda tegas atau alarm.',
-      category: 'Tradisional',
+      name: 'Bel Listrik Sekolah Kencang (10s - 3x Dering)',
+      desc: 'Dering lonceng listrik mekanik sekolah bergetar kencang 10 detik dengan 3 siklus dering tanda pulang / alarm tegas.',
+      category: 'Bel Pulang / Alarm',
+    },
+    {
+      id: 'fire_bell',
+      name: 'Bel Alarm Pemadam / Gong (10s - 3x Dentang)',
+      desc: 'Gong lonceng alarm pemadam kebakaran nyaring kencang 10 detik (3 siklus dentang) tanda pulang atau darurat.',
+      category: 'Bel Pulang / Alarm',
     },
   ];
 
@@ -163,8 +174,9 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
           stopPreviewFnRef.current = null;
         });
         stopPreviewFnRef.current = stopFn;
-      } catch (err) {
-        console.error('Audio play error in ChimeManager:', err);
+      } catch (err: any) {
+        console.warn('Audio preview warning in ChimeManager:', err?.message || err);
+        setUploadError(err?.message || 'Gagal memutar audio nada dering. Pastikan file valid atau link bersifat publik.');
         setPlayingId(null);
       }
     }
@@ -181,6 +193,26 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
 
     setIsProcessingUpload(true);
     try {
+      if (settings.cloudinaryCloudName) {
+        try {
+          const uploaded = await uploadAudioToCloudinary(
+            file,
+            file.name,
+            settings.cloudinaryCloudName,
+            settings.cloudinaryUploadPreset
+          );
+          setAudioFileName(uploaded.fileName);
+          setAudioDataUrl(uploaded.url);
+          if (!chimeName) {
+            const cleanName = file.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ');
+            setChimeName(cleanName.charAt(0).toUpperCase() + cleanName.slice(1));
+          }
+          return;
+        } catch (cloudErr: any) {
+          console.warn('Cloudinary upload fallback to local storage:', cloudErr);
+        }
+      }
+
       const processed = await processAudioFile(file, 25 * 1024 * 1024);
       setAudioFileName(processed.fileName);
       setAudioDataUrl(processed.dataUrl);
@@ -216,19 +248,48 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
         }
       };
 
-      mediaRecorder.onstop = () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+      mediaRecorder.onstop = async () => {
+        // Always release microphone tracks immediately
+        stream.getTracks().forEach((track) => track.stop());
+
+        const actualMime = mediaRecorder.mimeType || audioChunksRef.current[0]?.type || 'audio/webm';
+        const audioBlob = new Blob(audioChunksRef.current, { type: actualMime });
+        if (audioBlob.size < 64) {
+          setUploadError('Rekaman terlalu singkat atau kosong. Silakan rekam ulang.');
+          return;
+        }
+
+        const ext = actualMime.includes('mp4') ? 'm4a' : actualMime.includes('ogg') ? 'ogg' : 'webm';
+        const generatedName = `Rekaman_Nada_${new Date().toISOString().slice(11, 19).replace(/:/g, '')}.${ext}`;
+
+        if (settings.cloudinaryCloudName) {
+          setIsProcessingUpload(true);
+          try {
+            const uploaded = await uploadAudioToCloudinary(
+              audioBlob,
+              generatedName,
+              settings.cloudinaryCloudName,
+              settings.cloudinaryUploadPreset
+            );
+            setAudioDataUrl(uploaded.url);
+            setAudioFileName(generatedName);
+            setAudioDuration(recordingSeconds);
+            return;
+          } catch (cloudErr) {
+            console.warn('Cloudinary upload fallback to local for recorded chime:', cloudErr);
+          } finally {
+            setIsProcessingUpload(false);
+          }
+        }
+
         const reader = new FileReader();
         reader.onloadend = () => {
           const base64data = reader.result as string;
           setAudioDataUrl(base64data);
-          setAudioFileName(`Rekaman_Nada_${new Date().toISOString().slice(11, 19).replace(/:/g, '')}.webm`);
+          setAudioFileName(generatedName);
           setAudioDuration(recordingSeconds);
         };
         reader.readAsDataURL(audioBlob);
-
-        // Stop all audio tracks to release microphone
-        stream.getTracks().forEach((track) => track.stop());
       };
 
       mediaRecorder.start(100);
@@ -368,26 +429,26 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-12">
       {/* Top Banner & Header */}
-      <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 relative overflow-hidden shadow-2xl">
-        {/* Glow background */}
-        <div className="absolute top-0 right-0 w-96 h-96 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none -mr-20 -mt-20" />
-        <div className="absolute bottom-0 left-0 w-80 h-80 bg-teal-500/10 rounded-full blur-3xl pointer-events-none -ml-20 -mb-20" />
+      <div className="bg-white border border-blue-100 rounded-3xl p-6 sm:p-8 relative overflow-hidden shadow-[0_8px_30px_rgb(0,0,0,0.04)]">
+        {/* Ambient background blur */}
+        <div className="absolute top-0 right-0 w-80 h-80 bg-blue-100/50 rounded-full blur-3xl pointer-events-none -mr-20 -mt-20" />
+        <div className="absolute bottom-0 left-0 w-80 h-80 bg-sky-50/50 rounded-full blur-3xl pointer-events-none -ml-20 -mb-20" />
 
         <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
           <div className="space-y-2">
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-xs font-bold uppercase tracking-wider">
-              <Music className="w-3.5 h-3.5 text-emerald-400" />
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-200 text-xs font-bold uppercase tracking-wider shadow-xs">
+              <Music className="w-3.5 h-3.5 text-blue-600" />
               <span>Kustomisasi Nada Dering Bel Sekolah</span>
             </div>
 
-            <h2 className="text-2xl sm:text-3xl font-black text-white tracking-tight flex items-center gap-3">
+            <h2 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight flex items-center gap-3">
               <span>Menu Ubah Suara Nada Dering Bel</span>
-              <span className="text-xs bg-amber-500 text-slate-950 px-2.5 py-1 rounded-lg font-black uppercase">
+              <span className="text-xs bg-amber-100 text-amber-800 border border-amber-200 px-2.5 py-1 rounded-lg font-bold uppercase">
                 MP3 / WAV / Rekaman
               </span>
             </h2>
 
-            <p className="text-sm text-slate-300 max-w-2xl leading-relaxed">
+            <p className="text-sm text-slate-600 max-w-2xl leading-relaxed">
               Pilih dari koleksi nada dering standar atau masukkan/unggah file nada dering bel unik buatan Anda sendiri (lagu mars sekolah, jingle Islami, lonceng gamelan, sirine MP3, dsb).
             </p>
           </div>
@@ -400,7 +461,7 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
                 setActiveTab('upload');
                 setIsModalOpen(true);
               }}
-              className="bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-black px-5 py-3 rounded-2xl text-xs sm:text-sm flex items-center gap-2 shadow-lg shadow-emerald-500/25 active:scale-95 transition-all cursor-pointer"
+              className="bg-blue-600 hover:bg-blue-700 text-white font-bold px-5 py-3 rounded-2xl text-xs sm:text-sm flex items-center gap-2 shadow-md shadow-blue-500/25 active:scale-95 transition-all cursor-pointer"
             >
               <Upload className="w-4 h-4 stroke-[2.5]" />
               <span>Unggah File Nada Bel</span>
@@ -412,9 +473,9 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
                 setActiveTab('record');
                 setIsModalOpen(true);
               }}
-              className="bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-500/30 px-4 py-3 rounded-2xl text-xs sm:text-sm font-bold flex items-center gap-2 transition-all cursor-pointer"
+              className="bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 px-4 py-3 rounded-2xl text-xs sm:text-sm font-bold flex items-center gap-2 transition-all cursor-pointer shadow-xs"
             >
-              <Mic className="w-4 h-4 text-emerald-400" />
+              <Mic className="w-4 h-4 text-blue-600" />
               <span>Rekam dari Mikrofon</span>
             </button>
           </div>
@@ -422,27 +483,27 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
       </div>
 
       {/* Global Default Ringtone Setting Card */}
-      <div className="bg-slate-950 border border-emerald-500/30 rounded-3xl p-6 space-y-5">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-800">
+      <div className="bg-white border border-blue-100 rounded-3xl p-6 space-y-5 shadow-[0_4px_20px_rgb(0,0,0,0.03)]">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100">
           <div>
-            <h3 className="text-base sm:text-lg font-extrabold text-white flex items-center gap-2">
-              <Sliders className="w-5 h-5 text-emerald-400" />
+            <h3 className="text-base sm:text-lg font-extrabold text-slate-900 flex items-center gap-2">
+              <Sliders className="w-5 h-5 text-blue-600" />
               <span>Pengaturan Nada Dering Utama (Global Default)</span>
             </h3>
-            <p className="text-xs text-slate-400 mt-1">
+            <p className="text-xs text-slate-500 mt-1">
               Tentukan nada dering yang berbunyi secara otomatis sebelum pengumuman suara bel dibacakan.
             </p>
           </div>
 
-          <label className="flex items-center gap-2.5 bg-slate-900 border border-slate-700 px-4 py-2.5 rounded-2xl cursor-pointer hover:border-emerald-500/50 transition-all">
+          <label className="flex items-center gap-2.5 bg-slate-50 border border-slate-200 px-4 py-2.5 rounded-2xl cursor-pointer hover:border-blue-300 transition-all">
             <input
               type="checkbox"
               checked={useCustomDefaultChime && customChimes.length > 0}
               disabled={customChimes.length === 0}
               onChange={(e) => handleToggleUseCustomDefault(e.target.checked)}
-              className="w-4 h-4 accent-emerald-500 cursor-pointer disabled:opacity-40"
+              className="w-4 h-4 accent-blue-600 cursor-pointer disabled:opacity-40"
             />
-            <span className="text-xs font-bold text-emerald-300">
+            <span className="text-xs font-bold text-slate-800">
               {useCustomDefaultChime ? 'Pakai Nada Kustom Sendiri' : 'Pakai Nada Sintesis Bawaan'}
             </span>
           </label>
@@ -595,10 +656,17 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
                         <span className="bg-slate-800 px-2 py-0.5 rounded text-emerald-300">
                           {chime.category.toUpperCase()}
                         </span>
-                        {chime.audioName && (
-                          <span className="bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 px-1.5 py-0.5 rounded text-[9px] font-sans font-bold">
-                            {getAudioFormatLabel(chime.audioName)}
+                        {isCloudAudioUrl(chime.audioUrl) ? (
+                          <span className="bg-blue-500/20 text-blue-300 border border-blue-500/30 px-1.5 py-0.5 rounded text-[9px] font-sans font-bold flex items-center gap-1">
+                            <Globe className="w-2.5 h-2.5" />
+                            Cloud Online
                           </span>
+                        ) : (
+                          chime.audioName && (
+                            <span className="bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 px-1.5 py-0.5 rounded text-[9px] font-sans font-bold">
+                              {getAudioFormatLabel(chime.audioName)}
+                            </span>
+                          )
                         )}
                         {chime.durationSec && (
                           <span>~{chime.durationSec}d</span>
@@ -847,11 +915,13 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
               <option value="none">🚫 Tanpa Nada Penutup</option>
               <option value="same_as_intro">🔄 Sama Nada Pembuka</option>
               <optgroup label="Nada Digital Penutup">
-                <option value="classic_3tone">🔔 Classic 3-Tone (Do-Mi-Sol)</option>
-                <option value="tube_chime">🔔 Tube Chime Soft</option>
-                <option value="westminster">🔔 Westminster 4-Tone</option>
-                <option value="islamic_duo">🔔 Islamic Duo Chime</option>
-                <option value="electric_bell">🔔 Electric Bell Ring</option>
+                <option value="classic_3tone">🔔 6-Tone Ascending Melodi (5.8s)</option>
+                <option value="tube_chime">🔔 Tubular Chime Lembut (5.8s)</option>
+                <option value="westminster">🔔 Westminster 8-Tone (6.8s)</option>
+                <option value="islamic_duo">🔔 Melodi Islami Maqam (6.2s)</option>
+                <option value="school_dismissal">🔔 Melodi Pulang Ceria (6.2s)</option>
+                <option value="electric_bell">🔔 Bel Listrik Kencang (10s - 3x Dering)</option>
+                <option value="fire_bell">🔔 Bel Alarm Pemadam / Gong (10s)</option>
               </optgroup>
               <optgroup label="Nada Kustom Buatan Anda">
                 {customChimes.map((c) => (
@@ -924,31 +994,44 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
             </div>
 
             {/* Tab Selector */}
-            <div className="grid grid-cols-2 gap-2 bg-slate-950 p-1 rounded-2xl border border-slate-800">
+            <div className="grid grid-cols-3 gap-1.5 bg-slate-950 p-1 rounded-2xl border border-slate-800">
               <button
                 type="button"
                 onClick={() => setActiveTab('upload')}
-                className={`py-2 px-4 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                className={`py-2 px-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
                   activeTab === 'upload'
                     ? 'bg-emerald-500 text-slate-950 font-black shadow-md'
                     : 'text-slate-400 hover:text-white'
                 }`}
               >
-                <Upload className="w-4 h-4" />
-                <span>Unggah File (AAC / MP3 / WAV)</span>
+                <Upload className="w-3.5 h-3.5" />
+                <span className="truncate">Upload File</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => setActiveTab('record')}
-                className={`py-2 px-4 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                className={`py-2 px-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
                   activeTab === 'record'
                     ? 'bg-emerald-500 text-slate-950 font-black shadow-md'
                     : 'text-slate-400 hover:text-white'
                 }`}
               >
-                <Mic className="w-4 h-4" />
-                <span>Rekam Mikrofon</span>
+                <Mic className="w-3.5 h-3.5" />
+                <span className="truncate">Rekam Mic</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveTab('url')}
+                className={`py-2 px-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                  activeTab === 'url'
+                    ? 'bg-emerald-500 text-slate-950 font-black shadow-md'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <Globe className="w-3.5 h-3.5" />
+                <span className="truncate">Link Cloud</span>
               </button>
             </div>
 
@@ -1023,6 +1106,52 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
                       </button>
                     </div>
                   )}
+                </div>
+              )}
+
+              {/* Tab 3: Cloud Link (Google Drive / Web) */}
+              {activeTab === 'url' && (
+                <div className="space-y-3 bg-slate-950/80 p-4 sm:p-5 rounded-2xl border border-blue-500/30">
+                  <div className="flex items-center gap-2 text-xs font-bold text-blue-300">
+                    <Globe className="w-4 h-4 text-blue-400" />
+                    <span>Tautan Audio Online (Bisa Diputar di Semua HP & Laptop)</span>
+                  </div>
+                  <p className="text-[11px] text-slate-400 leading-relaxed">
+                    Tempel link file audio online dari Google Drive, Dropbox, Cloudinary, atau web. Tautan ini otomatis dapat didengar di seluruh perangkat saat website dibuka di Vercel.
+                  </p>
+
+                  <div className="space-y-2">
+                    <input
+                      type="url"
+                      placeholder="https://drive.google.com/... atau https://.../nada-bel.mp3"
+                      value={cloudUrlInput}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setCloudUrlInput(val);
+                        const norm = normalizeAudioCloudUrl(val);
+                        setAudioDataUrl(norm);
+                        setAudioFileName(val.split('/').pop()?.split('?')[0] || 'Nada_Cloud_Online.mp3');
+                      }}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-400 font-mono"
+                    />
+
+                    {audioDataUrl && (
+                      <div className="bg-blue-950/30 border border-blue-500/40 rounded-xl p-3 flex items-center justify-between">
+                        <span className="text-xs text-blue-200 font-bold flex items-center gap-1.5">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                          Link Siap Digunakan
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => handlePlayPreview('modal_preview', audioDataUrl, false)}
+                          className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer transition shadow-xs"
+                        >
+                          <Play className="w-3.5 h-3.5 fill-current" />
+                          <span>Tes Putar Link</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
 

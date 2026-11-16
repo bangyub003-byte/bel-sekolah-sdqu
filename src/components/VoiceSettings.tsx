@@ -8,6 +8,9 @@ import {
   CheckCircle2,
   Mic,
   Radio,
+  Globe,
+  Cloud,
+  ExternalLink,
 } from 'lucide-react';
 import { AudioSettings } from '../types';
 import { getAvailableVoices, speakTTS, playChimeTone, playCustomAudio } from '../utils/audioSynth';
@@ -69,15 +72,15 @@ export const VoiceSettings: React.FC<VoiceSettingsProps> = ({
   };
 
   return (
-    <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl space-y-8">
+    <div className="bg-white border border-blue-100 rounded-3xl p-6 sm:p-8 shadow-[0_4px_20px_rgb(0,0,0,0.03)] space-y-8">
       {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-6 border-b border-slate-800">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-6 border-b border-slate-100">
         <div>
-          <h2 className="text-xl sm:text-2xl font-black text-white flex items-center gap-2">
-            <Sliders className="w-6 h-6 text-emerald-400" />
+          <h2 className="text-xl sm:text-2xl font-black text-slate-900 flex items-center gap-2">
+            <Sliders className="w-6 h-6 text-blue-600" />
             <span>Pengaturan Suara & Rekaman Sendiri</span>
           </h2>
-          <p className="text-xs sm:text-sm text-slate-400 mt-1">
+          <p className="text-xs sm:text-sm text-slate-500 mt-1">
             Sesuaikan kalimat awalan pengumuman, rekam suara asli Anda via mikrofon, atau pilih aksen TTS Bahasa Indonesia.
           </p>
         </div>
@@ -86,11 +89,11 @@ export const VoiceSettings: React.FC<VoiceSettingsProps> = ({
           <button
             onClick={handleTestVoice}
             disabled={testing}
-            className="bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-black px-5 py-2.5 rounded-xl shadow-lg shadow-emerald-500/20 flex items-center gap-2 text-xs sm:text-sm transition-all cursor-pointer active:scale-95"
+            className="bg-blue-600 hover:bg-blue-700 text-white font-bold px-5 py-2.5 rounded-xl shadow-md shadow-blue-500/20 flex items-center gap-2 text-xs sm:text-sm transition-all cursor-pointer active:scale-95"
           >
             {testing ? (
               <span className="flex items-center gap-2">
-                <span className="w-3.5 h-3.5 border-2 border-slate-950 border-t-transparent rounded-full animate-spin"></span>
+                <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
                 Memutar Tes...
               </span>
             ) : (
@@ -103,10 +106,10 @@ export const VoiceSettings: React.FC<VoiceSettingsProps> = ({
 
           <button
             onClick={onResetSettings}
-            className="bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 p-2.5 rounded-xl transition-all cursor-pointer"
+            className="bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 p-2.5 rounded-xl transition-all cursor-pointer shadow-xs"
             title="Reset Pengaturan Suara ke Default"
           >
-            <RotateCcw className="w-4 h-4 text-amber-400" />
+            <RotateCcw className="w-4 h-4 text-amber-500" />
           </button>
         </div>
       </div>
@@ -115,28 +118,28 @@ export const VoiceSettings: React.FC<VoiceSettingsProps> = ({
       <AudioCloningManager settings={settings} onUpdateSettings={onUpdateSettings} />
 
       {/* Global Custom Voice Recording Box */}
-      <div className="bg-slate-950 border border-emerald-500/30 p-6 rounded-3xl space-y-5">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-800">
+      <div className="bg-slate-50 border border-blue-200/80 p-6 rounded-3xl space-y-5 shadow-xs">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-200">
           <div>
-            <h3 className="text-base font-extrabold text-white flex items-center gap-2">
-              <Radio className="w-5 h-5 text-emerald-400" />
+            <h3 className="text-base font-extrabold text-slate-900 flex items-center gap-2">
+              <Radio className="w-5 h-5 text-blue-600" />
               <span>Perekam Suara Awalan Bel (Custom Audio Prefix)</span>
             </h3>
-            <p className="text-xs text-slate-400 mt-0.5">
+            <p className="text-xs text-slate-500 mt-0.5">
               Anda bisa mengganti ucapan awalan otomatis dengan rekaman suara asli Anda sendiri (misal: "Perhatian kepada seluruh siswa SD Qur'an Unggulan...").
             </p>
           </div>
 
-          <label className="flex items-center gap-2 bg-slate-900 border border-slate-700 px-3 py-1.5 rounded-xl cursor-pointer shrink-0">
+          <label className="flex items-center gap-2 bg-white border border-slate-300 px-3.5 py-2 rounded-xl cursor-pointer shrink-0 shadow-xs">
             <input
               type="checkbox"
               checked={!!settings.useCustomPrefixAudio}
               onChange={(e) =>
                 onUpdateSettings({ ...settings, useCustomPrefixAudio: e.target.checked })
               }
-              className="w-4 h-4 accent-emerald-500 cursor-pointer"
+              className="w-4 h-4 accent-blue-600 cursor-pointer"
             />
-            <span className="text-xs font-bold text-emerald-300">Gunakan Suara Rekaman Ini</span>
+            <span className="text-xs font-bold text-slate-800">Gunakan Suara Rekaman Ini</span>
           </label>
         </div>
 
@@ -153,64 +156,68 @@ export const VoiceSettings: React.FC<VoiceSettingsProps> = ({
           }
           title="Rekam Awalan Pembuka Bel"
           description="Rekam suara dari mikrofon Anda atau unggah file rekaman suara dari HP Android (AAC/M4A), MP3, atau WAV sebagai ucapan pembuka bel."
+          cloudinaryConfig={{
+            cloudName: settings.cloudinaryCloudName,
+            uploadPreset: settings.cloudinaryUploadPreset,
+          }}
         />
       </div>
 
       {/* Global Prefix Sentence Box */}
-      <div className="bg-slate-950 border border-slate-800 p-5 rounded-2xl space-y-3">
-        <label className="text-xs font-extrabold text-amber-300 uppercase tracking-wider flex items-center gap-2">
-          <Sparkles className="w-4 h-4 text-amber-400" />
+      <div className="bg-slate-50 border border-slate-200 p-5 rounded-2xl space-y-3">
+        <label className="text-xs font-extrabold text-blue-700 uppercase tracking-wider flex items-center gap-2">
+          <Sparkles className="w-4 h-4 text-amber-500" />
           <span>Kalimat Awalan Teks Speech (Global Prefix TTS)</span>
         </label>
-        <p className="text-xs text-slate-400">
+        <p className="text-xs text-slate-500">
           Kalimat di bawah ini diucapkan jika tidak menggunakan rekaman suara langsung:
         </p>
         <input
           type="text"
           value={settings.globalPrefix}
           onChange={(e) => onUpdateSettings({ ...settings, globalPrefix: e.target.value })}
-          className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-sm font-bold text-emerald-300 focus:outline-none focus:border-emerald-500"
+          className="w-full bg-white border border-slate-300 rounded-xl px-4 py-3 text-sm font-bold text-slate-900 focus:outline-hidden focus:border-blue-500"
         />
       </div>
 
       {/* Grid Settings */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* Voice Selection Dropdown */}
-        <div className="bg-slate-950 border border-slate-800 p-5 rounded-2xl space-y-3">
-          <label className="text-xs font-extrabold text-slate-300 uppercase tracking-wider flex items-center gap-2">
-            <Mic className="w-4 h-4 text-emerald-400" />
-            <span>Pilihan Akses Suara Pembaca (TTS Voice)</span>
+        <div className="bg-slate-50 border border-slate-200 p-5 rounded-2xl space-y-3">
+          <label className="text-xs font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-2">
+            <Mic className="w-4 h-4 text-blue-600" />
+            <span>Pilihan Suara Pembaca TTS (Khusus Pria / Laki-laki)</span>
           </label>
 
           <select
             value={settings.voiceURI}
             onChange={(e) => onUpdateSettings({ ...settings, voiceURI: e.target.value })}
-            className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-xs sm:text-sm text-white focus:outline-none focus:border-emerald-500 cursor-pointer"
+            className="w-full bg-white border border-slate-300 rounded-xl px-4 py-2.5 text-xs sm:text-sm text-slate-900 focus:outline-hidden focus:border-blue-500 cursor-pointer"
           >
-            <option value="">-- Suara Otomatis Indonesia (Sistem) --</option>
+            <option value="">-- 👨 Suara Otomatis Pria Indonesia (Sistem) --</option>
             {voices.map((v) => (
               <option key={v.voiceURI} value={v.voiceURI}>
-                {v.name} ({v.lang})
+                👨 {v.name} ({v.lang})
               </option>
             ))}
           </select>
           <span className="text-[11px] text-slate-500 block">
-            Rekomendasi: Pilih suara berlabel "Indonesian / id-ID" untuk pelafalan Bahasa Indonesia yang jernih.
+            Suara telah disetel khusus vokal laki-laki/pria (Ustadz & Santri) dengan intonasi mantap dan tegas.
           </span>
         </div>
 
         {/* Volume Controls */}
-        <div className="bg-slate-950 border border-slate-800 p-5 rounded-2xl space-y-4">
-          <label className="text-xs font-extrabold text-slate-300 uppercase tracking-wider flex items-center gap-2">
-            <Volume2 className="w-4 h-4 text-emerald-400" />
+        <div className="bg-slate-50 border border-slate-200 p-5 rounded-2xl space-y-4">
+          <label className="text-xs font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-2">
+            <Volume2 className="w-4 h-4 text-blue-600" />
             <span>Volume Nada Chime & Speech</span>
           </label>
 
           <div className="space-y-3">
             <div>
-              <div className="flex justify-between text-xs font-bold text-slate-300 mb-1">
+              <div className="flex justify-between text-xs font-bold text-slate-700 mb-1">
                 <span>Volume Nada Chime:</span>
-                <span className="text-emerald-400">{Math.round(settings.chimeVolume * 100)}%</span>
+                <span className="text-blue-700 font-mono">{Math.round(settings.chimeVolume * 100)}%</span>
               </div>
               <input
                 type="range"
@@ -221,14 +228,14 @@ export const VoiceSettings: React.FC<VoiceSettingsProps> = ({
                 onChange={(e) =>
                   onUpdateSettings({ ...settings, chimeVolume: parseFloat(e.target.value) })
                 }
-                className="w-full accent-emerald-500 cursor-pointer"
+                className="w-full accent-blue-600 cursor-pointer"
               />
             </div>
 
             <div>
-              <div className="flex justify-between text-xs font-bold text-slate-300 mb-1">
+              <div className="flex justify-between text-xs font-bold text-slate-700 mb-1">
                 <span>Volume Ucapan TTS:</span>
-                <span className="text-emerald-400">{Math.round(settings.volume * 100)}%</span>
+                <span className="text-blue-700 font-mono">{Math.round(settings.volume * 100)}%</span>
               </div>
               <input
                 type="range"
@@ -239,114 +246,106 @@ export const VoiceSettings: React.FC<VoiceSettingsProps> = ({
                 onChange={(e) =>
                   onUpdateSettings({ ...settings, volume: parseFloat(e.target.value) })
                 }
-                className="w-full accent-emerald-500 cursor-pointer"
+                className="w-full accent-blue-600 cursor-pointer"
               />
             </div>
           </div>
         </div>
 
         {/* Speed & Pitch Controls */}
-        <div className="bg-slate-950 border border-slate-800 p-5 rounded-2xl space-y-4">
-          <label className="text-xs font-extrabold text-slate-300 uppercase tracking-wider">
+        <div className="bg-slate-50 border border-slate-200 p-5 rounded-2xl space-y-4">
+          <label className="text-xs font-extrabold text-slate-800 uppercase tracking-wider">
             Kecepatan & Nada Bicara
           </label>
 
           <div className="space-y-3">
             <div>
-              <div className="flex justify-between text-xs font-bold text-slate-300 mb-1">
+              <div className="flex justify-between text-xs font-bold text-slate-700 mb-1">
                 <span>Kecepatan Bicara (Rate):</span>
-                <span className="text-cyan-400">{settings.rate}x</span>
+                <span className="text-blue-700 font-mono">{settings.rate}x</span>
               </div>
               <input
                 type="range"
-                min={0.6}
-                max={1.4}
+                min={0.5}
+                max={1.5}
                 step={0.05}
                 value={settings.rate}
                 onChange={(e) =>
                   onUpdateSettings({ ...settings, rate: parseFloat(e.target.value) })
                 }
-                className="w-full accent-cyan-500 cursor-pointer"
+                className="w-full accent-blue-600 cursor-pointer"
               />
             </div>
 
             <div>
-              <div className="flex justify-between text-xs font-bold text-slate-300 mb-1">
-                <span>Nada Tinggi/Rendah (Pitch):</span>
-                <span className="text-cyan-400">{settings.pitch}x</span>
+              <div className="flex justify-between text-xs font-bold text-slate-700 mb-1">
+                <span>Tinggi Nada Suara (Pitch):</span>
+                <span className="text-blue-700 font-mono">{settings.pitch}x</span>
               </div>
               <input
                 type="range"
-                min={0.7}
-                max={1.3}
+                min={0.5}
+                max={1.5}
                 step={0.05}
                 value={settings.pitch}
                 onChange={(e) =>
                   onUpdateSettings({ ...settings, pitch: parseFloat(e.target.value) })
                 }
-                className="w-full accent-cyan-500 cursor-pointer"
+                className="w-full accent-blue-600 cursor-pointer"
               />
             </div>
           </div>
         </div>
 
-        {/* Repeat & Enable TTS Toggle */}
-        <div className="bg-slate-950 border border-slate-800 p-5 rounded-2xl space-y-4 flex flex-col justify-between">
-          <label className="text-xs font-extrabold text-slate-300 uppercase tracking-wider">
-            Opsi Pengulangan & Pengaktifan
+        {/* Repeat Speech Controls */}
+        <div className="bg-slate-50 border border-slate-200 p-5 rounded-2xl space-y-3">
+          <label className="text-xs font-extrabold text-slate-800 uppercase tracking-wider">
+            Pengulangan Ucapan Bel (Repeat)
           </label>
-
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold text-slate-300">Aktifkan Suara Ucapan TTS</span>
-              <input
-                type="checkbox"
-                checked={settings.enableTTS}
-                onChange={(e) => onUpdateSettings({ ...settings, enableTTS: e.target.checked })}
-                className="w-5 h-5 accent-emerald-500 cursor-pointer"
-              />
-            </div>
-
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold text-slate-300">Ulangi Ucapan Pesan</span>
-              <select
-                value={settings.repeatSpeechCount}
-                onChange={(e) =>
-                  onUpdateSettings({ ...settings, repeatSpeechCount: Number(e.target.value) })
-                }
-                className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-xs font-bold text-emerald-400 cursor-pointer"
-              >
-                <option value={1}>1 Kali Ucapan</option>
-                <option value={2}>2 Kali Pengulangan</option>
-              </select>
-            </div>
-          </div>
-
-          <div className="pt-3 border-t border-slate-900 text-[11px] text-slate-500">
-            Setiap bel otomatis berbunyi, nada chime dimainkan terlebih dahulu lalu disusul ucapan pesan.
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => onUpdateSettings({ ...settings, repeatSpeechCount: 1 })}
+              className={`flex-1 py-2 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
+                settings.repeatSpeechCount === 1
+                  ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
+                  : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+              }`}
+            >
+              Ucapkan 1 Kali
+            </button>
+            <button
+              type="button"
+              onClick={() => onUpdateSettings({ ...settings, repeatSpeechCount: 2 })}
+              className={`flex-1 py-2 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
+                settings.repeatSpeechCount === 2
+                  ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
+                  : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+              }`}
+            >
+              Ucapkan 2 Kali (Repeat)
+            </button>
           </div>
         </div>
       </div>
 
-      {/* Global Outro Chime Card */}
-      <div className="bg-slate-950/90 border border-slate-800 rounded-2xl p-6 space-y-5">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-800">
+      {/* Global Outro Chime Settings */}
+      <div className="bg-slate-50 border border-slate-200 p-6 rounded-3xl space-y-4 shadow-xs">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200">
           <div>
-            <div className="flex items-center gap-2">
-              <span className="w-2.5 h-2.5 rounded-full bg-amber-400"></span>
-              <h3 className="text-base font-extrabold text-white">
-                Nada Dering Penutup Otomatis (Outro Chime setelah Rekaman VO)
-              </h3>
-            </div>
-            <p className="text-xs text-slate-400 mt-1">
-              Membunyikan nada lonceng/chime kembali setelah suara rekaman atau pengumuman selesai berbicara.
+            <h3 className="text-base font-extrabold text-slate-900 flex items-center gap-2">
+              <Sparkles className="w-5 h-5 text-amber-500" />
+              <span>Nada Penutup Pengumuman (Global Outro Chime)</span>
+            </h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Bunyikan nada penutup otomatis setelah pengumuman suara selesai.
             </p>
           </div>
 
           <label className="relative inline-flex items-center cursor-pointer shrink-0">
             <input
               type="checkbox"
-              checked={settings.enableGlobalOutroChime ?? false}
+              checked={!!settings.enableGlobalOutroChime}
               onChange={(e) =>
                 onUpdateSettings({
                   ...settings,
@@ -354,45 +353,18 @@ export const VoiceSettings: React.FC<VoiceSettingsProps> = ({
                   globalOutroChimeType: settings.globalOutroChimeType || 'classic_3tone',
                 })
               }
-              className="sr-only peer"
+              className="w-5 h-5 accent-blue-600 cursor-pointer"
             />
-            <div className="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-500"></div>
-            <span className="ml-3 text-xs font-bold text-slate-200">
+            <span className="ml-2 text-xs font-bold text-slate-800">
               {settings.enableGlobalOutroChime ? 'Aktif' : 'Nonaktif'}
             </span>
           </label>
         </div>
 
-        {/* Visual Workflow */}
-        <div className="bg-slate-900/90 border border-slate-800/80 rounded-xl p-3 flex items-center justify-between gap-2 text-xs">
-          <div className="flex-1 text-center bg-emerald-950/40 border border-emerald-500/30 rounded-lg p-2">
-            <span className="text-[10px] text-emerald-400 font-bold block">1. Nada Pembuka</span>
-            <span className="text-white font-extrabold text-xs">Intro Chime</span>
-          </div>
-          <span className="text-slate-500 font-bold">➜</span>
-          <div className="flex-1 text-center bg-cyan-950/40 border border-cyan-500/30 rounded-lg p-2">
-            <span className="text-[10px] text-cyan-400 font-bold block">2. Suara / Rekaman</span>
-            <span className="text-white font-extrabold text-xs">Pengumuman VO</span>
-          </div>
-          <span className="text-slate-500 font-bold">➜</span>
-          <div className={`flex-1 text-center rounded-lg p-2 border transition-all ${
-            settings.enableGlobalOutroChime
-              ? 'bg-amber-950/40 border-amber-500/40 text-amber-300'
-              : 'bg-slate-900 border-slate-800 text-slate-500'
-          }`}>
-            <span className={`text-[10px] font-bold block ${settings.enableGlobalOutroChime ? 'text-amber-400' : 'text-slate-500'}`}>
-              3. Nada Penutup
-            </span>
-            <span className="font-extrabold text-xs">
-              {settings.enableGlobalOutroChime ? 'Outro Chime' : 'Langsung Selesai'}
-            </span>
-          </div>
-        </div>
-
         {settings.enableGlobalOutroChime && (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
             <div>
-              <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-2">
+              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
                 Pilihan Nada Penutup (Outro Chime)
               </label>
               <select
@@ -403,14 +375,16 @@ export const VoiceSettings: React.FC<VoiceSettingsProps> = ({
                     globalOutroChimeType: e.target.value as any,
                   })
                 }
-                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-xs text-white focus:outline-none focus:border-amber-400 cursor-pointer"
+                className="w-full bg-white border border-slate-300 rounded-xl px-4 py-2.5 text-xs text-slate-900 focus:outline-hidden focus:border-blue-500 cursor-pointer"
               >
-                <option value="same_as_intro">🔄 Sama dengan Nada Pembuka (Westminster/Kustom)</option>
-                <option value="classic_3tone">🔔 Classic 3-Tone Ascending (Do-Mi-Sol)</option>
-                <option value="tube_chime">🔔 Tube Chime Soft (Melodik Halus)</option>
-                <option value="westminster">🔔 Westminster 4-Tone</option>
-                <option value="islamic_duo">🔔 Islamic Duo Chime (Syahdu Tenang)</option>
-                <option value="electric_bell">🔔 Electric Bell Ring</option>
+                <option value="same_as_intro">🔄 Sama dengan Nada Pembuka</option>
+                <option value="classic_3tone">🔔 6-Tone Ascending Melodi (5.8s)</option>
+                <option value="school_dismissal">🔔 Melodi Pulang Ceria (6.2s)</option>
+                <option value="electric_bell">🔔 Bel Listrik Kencang (10s - 3x Dering)</option>
+                <option value="fire_bell">🔔 Bel Alarm Pemadam / Gong (10s)</option>
+                <option value="westminster">🔔 Westminster 8-Tone (6.8s)</option>
+                <option value="tube_chime">🔔 Tube Chime Soft (5.8s)</option>
+                <option value="islamic_duo">🔔 Islamic Duo Chime (6.2s)</option>
                 {(settings.customChimes && settings.customChimes.length > 0) && (
                   <optgroup label="✨ Nada Dering Kustom Buatan Anda">
                     {settings.customChimes.map((c) => (
@@ -424,9 +398,9 @@ export const VoiceSettings: React.FC<VoiceSettingsProps> = ({
             </div>
 
             <div>
-              <div className="flex justify-between text-xs font-bold text-slate-300 mb-2">
+              <div className="flex justify-between text-xs font-bold text-slate-700 mb-2">
                 <span>Jeda Waktu Sebelum Nada Penutup:</span>
-                <span className="text-amber-400 font-mono">
+                <span className="text-blue-700 font-mono">
                   {settings.outroChimeDelayMs ?? 500} ms ({( (settings.outroChimeDelayMs ?? 500) / 1000 ).toFixed(1)} detik)
                 </span>
               </div>
@@ -442,14 +416,89 @@ export const VoiceSettings: React.FC<VoiceSettingsProps> = ({
                     outroChimeDelayMs: parseInt(e.target.value, 10),
                   })
                 }
-                className="w-full accent-amber-500 cursor-pointer mt-1"
+                className="w-full accent-blue-600 cursor-pointer mt-1"
               />
-              <span className="text-[10px] text-slate-500 block mt-1">
-                Waktu hening sejenak setelah suara rekaman berhenti sebelum nada penutup berbunyi.
-              </span>
             </div>
           </div>
         )}
+      </div>
+
+      {/* Penyimpanan Cloud Online (Multi-Perangkat / GitHub & Vercel) */}
+      <div className="bg-gradient-to-br from-blue-50/80 via-white to-sky-50/70 border border-blue-200 p-6 rounded-3xl space-y-4 shadow-xs">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-blue-100">
+          <div>
+            <h3 className="text-base font-extrabold text-slate-900 flex items-center gap-2">
+              <Cloud className="w-5 h-5 text-blue-600" />
+              <span>Upload Audio ke Cloud Online (Sinkron Semua HP & Laptop)</span>
+            </h3>
+            <p className="text-xs text-slate-600 mt-0.5">
+              Agar hasil upload suara VO, nada depan, dan nada penutup otomatis tersimpan online &amp; bisa diputar di perangkat mana saja saat di-deploy ke Vercel.
+            </p>
+          </div>
+
+          <span
+            className={`text-[11px] font-bold px-3 py-1 rounded-full border shrink-0 flex items-center gap-1.5 ${
+              settings.cloudinaryCloudName
+                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                : 'bg-slate-100 text-slate-600 border-slate-200'
+            }`}
+          >
+            <Globe className="w-3.5 h-3.5" />
+            <span>{settings.cloudinaryCloudName ? 'Cloud Upload Aktif' : 'Mode Link / Lokal'}</span>
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+              Cloudinary Cloud Name (Gratis)
+            </label>
+            <input
+              type="text"
+              placeholder="misal: dxyz123abc"
+              value={settings.cloudinaryCloudName || ''}
+              onChange={(e) =>
+                onUpdateSettings({ ...settings, cloudinaryCloudName: e.target.value.trim() })
+              }
+              className="w-full bg-white border border-slate-300 rounded-xl px-4 py-2.5 text-xs sm:text-sm font-mono text-slate-900 placeholder-slate-400 focus:outline-hidden focus:border-blue-500"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+              Unsigned Upload Preset
+            </label>
+            <input
+              type="text"
+              placeholder="misal: bel_sekolah"
+              value={settings.cloudinaryUploadPreset || ''}
+              onChange={(e) =>
+                onUpdateSettings({ ...settings, cloudinaryUploadPreset: e.target.value.trim() })
+              }
+              className="w-full bg-white border border-slate-300 rounded-xl px-4 py-2.5 text-xs sm:text-sm font-mono text-slate-900 placeholder-slate-400 focus:outline-hidden focus:border-blue-500"
+            />
+          </div>
+        </div>
+
+        <div className="bg-white/90 border border-blue-100 rounded-2xl p-3.5 text-xs text-slate-600 space-y-1.5">
+          <div className="font-bold text-slate-800 flex items-center justify-between">
+            <span>Cara Praktis Aktifkan Upload Langsung ke Cloud (2 Menit):</span>
+            <a
+              href="https://cloudinary.com/users/register_free"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-blue-600 hover:text-blue-800 font-bold inline-flex items-center gap-1 underline"
+            >
+              <span>Daftar Cloudinary Gratis</span>
+              <ExternalLink className="w-3 h-3" />
+            </a>
+          </div>
+          <ol className="list-decimal pl-4 space-y-1 text-[11px] leading-relaxed">
+            <li>Buat akun gratis di Cloudinary, salin <strong>Cloud Name</strong> dari Dashboard lalu tempel di kolom kiri.</li>
+            <li>Buka menu <strong>Settings &gt; Upload &gt; Upload presets</strong>, buat preset mode <strong>Unsigned</strong> (misal: <code>bel_sekolah</code>) dan isi di kolom kanan.</li>
+            <li>Selesai! Setiap Anda upload file rekaman atau rekam mic di <strong>Nada Dering Bel</strong> / <strong>Edit Jadwal VO</strong>, file otomatis tersimpan online. Anda juga tetap bisa memakai fitur <strong>Link Cloud (Google Drive / Dropbox)</strong> tanpa akun tambahan.</li>
+          </ol>
+        </div>
       </div>
     </div>
   );

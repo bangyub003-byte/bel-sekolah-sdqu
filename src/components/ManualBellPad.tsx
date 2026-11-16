@@ -7,11 +7,13 @@ import {
   AlertTriangle,
   Megaphone,
   Play,
-  Sparkles,
   Volume2,
+  Globe,
+  Sparkles,
+  Loader2,
 } from 'lucide-react';
-import { ChimeType, AudioSettings } from '../types';
-import { playBellSequence } from '../utils/audioSynth';
+import { ChimeType, AudioSettings, SpeechLanguage, SpeechInputMode } from '../types';
+import { playBellSequence, translateSpeechWithAI } from '../utils/audioSynth';
 
 interface ManualBellPadProps {
   audioSettings: AudioSettings;
@@ -23,6 +25,9 @@ export const ManualBellPad: React.FC<ManualBellPadProps> = ({
   onLogManualBell,
 }) => {
   const [customText, setCustomText] = useState('');
+  const [customLanguage, setCustomLanguage] = useState<SpeechLanguage>('id');
+  const [customInputMode, setCustomInputMode] = useState<SpeechInputMode>('auto_translate');
+  const [isTranslating, setIsTranslating] = useState(false);
   const [customChime, setCustomChime] = useState<ChimeType>('westminster');
   const [customOutroChime, setCustomOutroChime] = useState<ChimeType | 'none' | 'same_as_intro'>('same_as_intro');
   const [isPlaying, setIsPlaying] = useState(false);
@@ -37,9 +42,9 @@ export const ManualBellPad: React.FC<ManualBellPadProps> = ({
       outroChime: 'classic_3tone' as ChimeType,
       speechText: 'memasuki jam pelajaran. Seluruh murid diharapkan segera masuk ke dalam kelas masing-masing.',
       icon: BellRing,
-      gradient: 'from-emerald-500 to-teal-600',
-      shadow: 'shadow-emerald-500/20',
-      border: 'border-emerald-500/40',
+      iconBg: 'bg-blue-100 text-blue-700',
+      border: 'border-blue-200',
+      activeRing: 'ring-blue-500',
     },
     {
       id: 'p-istirahat',
@@ -49,9 +54,9 @@ export const ManualBellPad: React.FC<ManualBellPadProps> = ({
       outroChime: 'tube_chime' as ChimeType,
       speechText: 'memasuki waktu istirahat. Selamat beristirahat dan tetap menjaga kebersihan lingkungan sekolah.',
       icon: Coffee,
-      gradient: 'from-amber-500 to-orange-600',
-      shadow: 'shadow-amber-500/20',
-      border: 'border-amber-500/40',
+      iconBg: 'bg-amber-100 text-amber-700',
+      border: 'border-amber-200',
+      activeRing: 'ring-amber-500',
     },
     {
       id: 'p-sholat',
@@ -61,21 +66,21 @@ export const ManualBellPad: React.FC<ManualBellPadProps> = ({
       outroChime: 'islamic_duo' as ChimeType,
       speechText: 'memasuki waktu persiapan Sholat Dzuhur Berjamaah. Mari bersiap menuju tempat ibadah.',
       icon: HeartHandshake,
-      gradient: 'from-indigo-500 to-purple-600',
-      shadow: 'shadow-indigo-500/20',
-      border: 'border-indigo-500/40',
+      iconBg: 'bg-emerald-100 text-emerald-700',
+      border: 'border-emerald-200',
+      activeRing: 'ring-emerald-500',
     },
     {
       id: 'p-pulang',
       title: 'Bel Pulang Sekolah',
       desc: 'Pengumuman jam selesai pelajaran',
-      chime: 'tube_chime' as ChimeType,
-      outroChime: 'classic_3tone' as ChimeType,
+      chime: 'school_dismissal' as ChimeType,
+      outroChime: 'electric_bell' as ChimeType,
       speechText: 'kegiatan belajar mengajar hari ini telah selesai. Selamat jalan dan hati-hati di jalan.',
       icon: DoorOpen,
-      gradient: 'from-cyan-500 to-blue-600',
-      shadow: 'shadow-cyan-500/20',
-      border: 'border-cyan-500/40',
+      iconBg: 'bg-purple-100 text-purple-700',
+      border: 'border-purple-200',
+      activeRing: 'ring-purple-500',
     },
     {
       id: 'p-darurat',
@@ -85,9 +90,9 @@ export const ManualBellPad: React.FC<ManualBellPadProps> = ({
       outroChime: 'electric_bell' as ChimeType,
       speechText: 'perhatian seluruh warga sekolah, mohon bersiap untuk kegiatan evakuasi atau pengumuman darurat.',
       icon: AlertTriangle,
-      gradient: 'from-rose-500 to-red-600',
-      shadow: 'shadow-rose-500/20',
-      border: 'border-rose-500/40',
+      iconBg: 'bg-rose-100 text-rose-700',
+      border: 'border-rose-200',
+      activeRing: 'ring-rose-500',
     },
   ];
 
@@ -120,6 +125,20 @@ export const ManualBellPad: React.FC<ManualBellPadProps> = ({
     }
   };
 
+  const handleTranslateCustomPreview = async () => {
+    if (!customText.trim() || customLanguage === 'id' || isTranslating) return;
+    setIsTranslating(true);
+    try {
+      const translated = await translateSpeechWithAI(customText.trim(), customLanguage);
+      if (translated) {
+        setCustomText(translated);
+        setCustomInputMode('direct_text');
+      }
+    } finally {
+      setIsTranslating(false);
+    }
+  };
+
   const handleTriggerCustom = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!customText.trim() || isPlaying) return;
@@ -127,7 +146,9 @@ export const ManualBellPad: React.FC<ManualBellPadProps> = ({
     setIsPlaying(true);
     setActivePresetId('custom');
 
-    const fullText = `${audioSettings.globalPrefix}${customText.trim()}`;
+    const rawText = customText.trim();
+    const fullText =
+      customLanguage === 'id' ? `${audioSettings.globalPrefix}${rawText}` : rawText;
 
     try {
       await playBellSequence(
@@ -136,13 +157,17 @@ export const ManualBellPad: React.FC<ManualBellPadProps> = ({
         audioSettings,
         1.0,
         undefined,
-        'tts',
+        customLanguage !== 'id' ? 'cloned' : 'tts',
         undefined,
         undefined,
         customOutroChime !== 'none',
-        customOutroChime
+        customOutroChime,
+        undefined,
+        customLanguage,
+        customInputMode,
+        customLanguage !== 'id' && customInputMode === 'direct_text' ? rawText : undefined
       );
-      onLogManualBell('Bel Manual Custom Pengumuman', fullText);
+      onLogManualBell(`Bel Manual Custom (${customLanguage.toUpperCase()})`, fullText);
       setCustomText('');
     } catch (err) {
       console.error('Trigger custom bell error:', err);
@@ -153,22 +178,22 @@ export const ManualBellPad: React.FC<ManualBellPadProps> = ({
   };
 
   return (
-    <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl space-y-8">
+    <div className="bg-white border border-blue-100 rounded-3xl p-6 sm:p-8 shadow-[0_4px_20px_rgb(0,0,0,0.03)] space-y-8">
       {/* Title */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-6 border-b border-slate-800">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-6 border-b border-slate-100">
         <div>
-          <h2 className="text-xl sm:text-2xl font-black text-white flex items-center gap-2">
-            <BellRing className="w-6 h-6 text-emerald-400" />
+          <h2 className="text-xl sm:text-2xl font-black text-slate-900 flex items-center gap-2">
+            <BellRing className="w-6 h-6 text-blue-600" />
             <span>Pad Bel Manual Seketika (Instant Manual Bell)</span>
           </h2>
-          <p className="text-xs sm:text-sm text-slate-400 mt-1">
+          <p className="text-xs sm:text-sm text-slate-500 mt-1">
             Tekan tombol preset di bawah ini untuk membunyikan bel secara manual kapan saja tanpa menunggu jadwal jam.
           </p>
         </div>
 
         {isPlaying && (
-          <div className="bg-amber-500/20 text-amber-300 border border-amber-500/40 px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 animate-pulse">
-            <Volume2 className="w-4 h-4 text-amber-400" />
+          <div className="bg-amber-50 text-amber-700 border border-amber-200 px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 animate-pulse">
+            <Volume2 className="w-4 h-4 text-amber-600" />
             <span>Sedang Membunyikan Bel Manual...</span>
           </div>
         )}
@@ -185,33 +210,33 @@ export const ManualBellPad: React.FC<ManualBellPadProps> = ({
               key={preset.id}
               onClick={() => handleTriggerPreset(preset)}
               disabled={isPlaying}
-              className={`group bg-slate-950 border ${preset.border} rounded-2xl p-5 text-left transition-all hover:scale-[1.02] active:scale-95 cursor-pointer relative overflow-hidden flex flex-col justify-between ${
-                isThisPlaying ? 'ring-2 ring-emerald-400 bg-slate-900' : 'hover:bg-slate-900/80'
+              className={`group bg-white border ${preset.border} rounded-2xl p-5 text-left transition-all hover:shadow-md hover:scale-[1.01] active:scale-95 cursor-pointer flex flex-col justify-between shadow-xs ${
+                isThisPlaying ? `ring-2 ${preset.activeRing} bg-blue-50/40` : 'hover:bg-slate-50/60'
               }`}
             >
               <div>
                 <div className="flex items-center justify-between mb-3">
-                  <div className={`w-12 h-12 rounded-2xl bg-gradient-to-r ${preset.gradient} text-slate-950 flex items-center justify-center shadow-lg ${preset.shadow} shrink-0`}>
+                  <div className={`w-12 h-12 rounded-2xl ${preset.iconBg} flex items-center justify-center shadow-xs shrink-0`}>
                     <Icon className="w-6 h-6" />
                   </div>
 
-                  <span className="text-[10px] bg-slate-900 text-slate-400 border border-slate-800 px-2 py-0.5 rounded font-mono">
+                  <span className="text-[10px] bg-slate-100 text-slate-600 border border-slate-200 px-2 py-0.5 rounded-md font-mono">
                     Manual Trigger
                   </span>
                 </div>
 
-                <h3 className="text-base font-extrabold text-white group-hover:text-emerald-300 transition-colors">
+                <h3 className="text-base font-extrabold text-slate-900 group-hover:text-blue-700 transition-colors">
                   {preset.title}
                 </h3>
-                <p className="text-xs text-slate-400 mt-1">{preset.desc}</p>
+                <p className="text-xs text-slate-500 mt-1">{preset.desc}</p>
               </div>
 
-              <div className="mt-4 pt-3 border-t border-slate-800/80 flex items-center justify-between text-xs font-bold text-slate-300">
-                <span className="flex items-center gap-1.5 text-emerald-400">
+              <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs font-bold text-slate-700">
+                <span className="flex items-center gap-1.5 text-blue-600">
                   <Play className="w-3.5 h-3.5 fill-current" />
                   <span>Bunyikan Sekarang</span>
                 </span>
-                <span className="text-[10px] text-slate-500 font-mono">
+                <span className="text-[10px] text-slate-400 font-mono">
                   {preset.chime}
                 </span>
               </div>
@@ -221,41 +246,110 @@ export const ManualBellPad: React.FC<ManualBellPadProps> = ({
       </div>
 
       {/* Custom Broadcast Box */}
-      <form onSubmit={handleTriggerCustom} className="bg-slate-950 border border-slate-800 rounded-2xl p-6 space-y-4">
+      <form onSubmit={handleTriggerCustom} className="bg-slate-50/80 border border-slate-200 rounded-2xl p-6 space-y-4">
         <div className="flex items-center gap-2">
-          <Megaphone className="w-5 h-5 text-amber-400" />
-          <h3 className="text-base font-bold text-white">Siaran Bel Custom / Pengumuman Khusus</h3>
+          <Megaphone className="w-5 h-5 text-amber-500" />
+          <h3 className="text-base font-bold text-slate-900">Siaran Bel Custom / Pengumuman Khusus</h3>
         </div>
 
-        <p className="text-xs text-slate-400">
+        <p className="text-xs text-slate-500">
           Ketik kalimat bebas di bawah ini. Sistem akan membunyikan nada chime lalu membacakan pesan tersebut ke speaker sekolah secara langsung:
         </p>
 
         <div className="grid grid-cols-1 sm:grid-cols-12 gap-4">
           <div className="sm:col-span-6 space-y-2">
-            <label className="text-xs font-bold text-slate-300 block">
-              Pesan Siaran Pengumuman:
-            </label>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <label className="text-xs font-bold text-slate-700">
+                Pesan Siaran Pengumuman:
+              </label>
+
+              <div className="flex items-center gap-1.5">
+                <Globe className="w-3.5 h-3.5 text-indigo-600" />
+                <select
+                  value={customLanguage}
+                  onChange={(e) => setCustomLanguage(e.target.value as SpeechLanguage)}
+                  className="bg-white border border-slate-200 rounded-lg px-2 py-1 text-[11px] font-bold text-slate-800 cursor-pointer focus:outline-hidden focus:border-blue-500"
+                >
+                  <option value="id">🇮🇩 Bahasa Indonesia</option>
+                  <option value="ar">🇸🇦 Bahasa Arab (AI)</option>
+                  <option value="en">🇬🇧 Bahasa Inggris (AI)</option>
+                  <option value="jv">🇮🇩 Bahasa Jawa (AI)</option>
+                </select>
+              </div>
+            </div>
+
+            {customLanguage !== 'id' && (
+              <div className="flex flex-wrap items-center justify-between gap-1.5 bg-indigo-50/70 border border-indigo-200 rounded-xl px-2.5 py-1.5 text-[11px]">
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setCustomInputMode('auto_translate')}
+                    className={`px-2 py-0.5 rounded-md font-bold cursor-pointer ${
+                      customInputMode === 'auto_translate'
+                        ? 'bg-indigo-600 text-white'
+                        : 'bg-white text-slate-600 border border-slate-200'
+                    }`}
+                  >
+                    Tulis Indonesia (AI Translate)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCustomInputMode('direct_text')}
+                    className={`px-2 py-0.5 rounded-md font-bold cursor-pointer ${
+                      customInputMode === 'direct_text'
+                        ? 'bg-indigo-600 text-white'
+                        : 'bg-white text-slate-600 border border-slate-200'
+                    }`}
+                  >
+                    Tulis Teks Sendiri
+                  </button>
+                </div>
+
+                {customInputMode === 'auto_translate' && (
+                  <button
+                    type="button"
+                    onClick={handleTranslateCustomPreview}
+                    disabled={!customText.trim() || isTranslating}
+                    className="px-2 py-0.5 rounded-md bg-white border border-indigo-300 text-indigo-700 font-bold flex items-center gap-1 hover:bg-indigo-100 cursor-pointer disabled:opacity-50"
+                  >
+                    {isTranslating ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
+                    <span>Pratinjau Terjemahan</span>
+                  </button>
+                )}
+              </div>
+            )}
+
             <textarea
               rows={3}
               required
+              dir={customLanguage === 'ar' && customInputMode === 'direct_text' ? 'rtl' : 'ltr'}
               value={customText}
               onChange={(e) => setCustomText(e.target.value)}
-              placeholder="Contoh: Diberitahukan kepada perwakilan ketua kelas 5B untuk berkumpul di ruang guru..."
-              className="w-full bg-slate-900 border border-slate-800 rounded-xl p-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
+              placeholder={
+                customLanguage === 'id'
+                  ? 'Contoh: Diberitahukan kepada perwakilan ketua kelas 5B untuk berkumpul di ruang guru...'
+                  : customInputMode === 'auto_translate'
+                  ? 'Tulis kalimat Bahasa Indonesia, nanti AI otomatis menerjemahkan & membacakannya...'
+                  : customLanguage === 'ar'
+                  ? 'Tulis teks Bahasa Arab di sini...'
+                  : customLanguage === 'en'
+                  ? 'Write English announcement text here...'
+                  : 'Tulis ukara Basa Jawa ing mriki...'
+              }
+              className="w-full bg-white border border-slate-200 rounded-xl p-3 text-sm text-slate-900 placeholder-slate-400 focus:outline-hidden focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
             />
           </div>
 
           <div className="sm:col-span-6 space-y-3 flex flex-col justify-between">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label className="text-[11px] font-bold text-emerald-300 block mb-1">
+                <label className="text-[11px] font-bold text-blue-700 block mb-1">
                   1. Nada Pembuka (Intro):
                 </label>
                 <select
                   value={customChime}
                   onChange={(e) => setCustomChime(e.target.value as ChimeType)}
-                  className="w-full bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-2 text-xs text-white focus:outline-none focus:border-emerald-500 cursor-pointer"
+                  className="w-full bg-white border border-slate-200 rounded-xl px-2.5 py-2 text-xs text-slate-800 focus:outline-hidden focus:border-blue-500 cursor-pointer font-medium"
                 >
                   {(audioSettings.customChimes && audioSettings.customChimes.length > 0) && (
                     <optgroup label="✨ Nada Dering Kustom">
@@ -267,32 +361,36 @@ export const ManualBellPad: React.FC<ManualBellPadProps> = ({
                     </optgroup>
                   )}
                   <optgroup label="🔔 Nada Sintesis">
-                    <option value="westminster">Westminster Chime</option>
-                    <option value="classic_3tone">Classic 3-Tone</option>
-                    <option value="electric_bell">Electric Bell</option>
-                    <option value="tube_chime">Tube Chime</option>
-                    <option value="islamic_duo">Islamic Duo</option>
+                    <option value="westminster">Westminster Chime (6.8s)</option>
+                    <option value="classic_3tone">6-Tone Melodi (5.8s)</option>
+                    <option value="school_dismissal">Melodi Pulang Ceria (6.2s)</option>
+                    <option value="electric_bell">Bel Listrik Kencang (10s)</option>
+                    <option value="fire_bell">Bel Alarm Pemadam (10s)</option>
+                    <option value="tube_chime">Tube Chime Lembut (5.8s)</option>
+                    <option value="islamic_duo">Islamic Duo Chime (6.2s)</option>
                   </optgroup>
                 </select>
               </div>
 
               <div>
-                <label className="text-[11px] font-bold text-amber-300 block mb-1">
+                <label className="text-[11px] font-bold text-amber-700 block mb-1">
                   3. Nada Penutup (Outro):
                 </label>
                 <select
                   value={customOutroChime}
                   onChange={(e) => setCustomOutroChime(e.target.value as any)}
-                  className="w-full bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-2 text-xs text-white focus:outline-none focus:border-amber-400 cursor-pointer"
+                  className="w-full bg-white border border-slate-200 rounded-xl px-2.5 py-2 text-xs text-slate-800 focus:outline-hidden focus:border-blue-500 cursor-pointer font-medium"
                 >
                   <option value="same_as_intro">🔄 Sama Nada Pembuka</option>
                   <option value="none">🚫 Tanpa Penutup</option>
                   <optgroup label="🔔 Nada Sintesis">
-                    <option value="classic_3tone">Classic 3-Tone</option>
-                    <option value="tube_chime">Tube Chime</option>
-                    <option value="westminster">Westminster Chime</option>
-                    <option value="islamic_duo">Islamic Duo</option>
-                    <option value="electric_bell">Electric Bell</option>
+                    <option value="classic_3tone">6-Tone Melodi (5.8s)</option>
+                    <option value="school_dismissal">Melodi Pulang Ceria (6.2s)</option>
+                    <option value="electric_bell">Bel Listrik Kencang (10s)</option>
+                    <option value="fire_bell">Bel Alarm Pemadam (10s)</option>
+                    <option value="tube_chime">Tube Chime Soft (5.8s)</option>
+                    <option value="westminster">Westminster Chime (6.8s)</option>
+                    <option value="islamic_duo">Islamic Duo (6.2s)</option>
                   </optgroup>
                   {(audioSettings.customChimes && audioSettings.customChimes.length > 0) && (
                     <optgroup label="✨ Nada Kustom">
@@ -310,7 +408,7 @@ export const ManualBellPad: React.FC<ManualBellPadProps> = ({
             <button
               type="submit"
               disabled={isPlaying || !customText.trim()}
-              className="w-full bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 disabled:opacity-50 text-slate-950 font-black py-2.5 rounded-xl shadow-lg shadow-amber-500/20 flex items-center justify-center gap-2 text-xs transition-all active:scale-95 cursor-pointer"
+              className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold py-2.5 rounded-xl shadow-md shadow-blue-500/20 flex items-center justify-center gap-2 text-xs transition-all active:scale-95 cursor-pointer"
             >
               <Megaphone className="w-4 h-4" />
               <span>{isPlaying ? 'Sedang Menyiarkan Bel...' : 'Siarkan Pengumuman Lengkap'}</span>

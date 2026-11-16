@@ -2,11 +2,22 @@ export type DayOfWeek = 1 | 2 | 3 | 4 | 5 | 6 | 0; // 1 = Monday, ..., 6 = Satur
 
 export type BellCategory = 'lesson' | 'break' | 'prayer' | 'assembly' | 'dismissal' | 'custom';
 
-export type BuiltinChimeType = 'westminster' | 'classic_3tone' | 'electric_bell' | 'tube_chime' | 'islamic_duo';
+export type BuiltinChimeType =
+  | 'westminster'
+  | 'classic_3tone'
+  | 'electric_bell'
+  | 'tube_chime'
+  | 'islamic_duo'
+  | 'fire_bell'
+  | 'school_dismissal';
 
 export type ChimeType = BuiltinChimeType | string;
 
 export type AudioType = 'tts' | 'recording' | 'cloned';
+
+export type SpeechLanguage = 'id' | 'ar' | 'en' | 'jv';
+
+export type SpeechInputMode = 'auto_translate' | 'direct_text';
 
 export interface CustomChime {
   id: string;
@@ -26,7 +37,8 @@ export interface ClonedVoiceProfile {
   sampleAudioUrl?: string; // Base64 voice recording sample
   sampleAudioName?: string;
   createdAt: number;
-  prebuiltVoiceFallback?: 'Kore' | 'Puck' | 'Fenrir' | 'Zephyr' | 'Aoede';
+  prebuiltVoiceFallback?: 'Kore' | 'Puck' | 'Fenrir' | 'Zephyr' | 'Charon';
+  playbackMode?: 'direct_recording' | 'ai_synthesis'; // 'direct_recording' for 100% exact voice playback, 'ai_synthesis' for AI text generation
 }
 
 export interface SavedAudioRecording {
@@ -42,7 +54,10 @@ export interface ScheduleItem {
   time: string; // HH:MM format (24-hour e.g. "07:20")
   label: string; // e.g. "Jam Pelajaran ke-1 (Tahfidzul Qur'an)"
   category: BellCategory;
-  speechText: string; // Text spoken by TTS after chime
+  speechText: string; // Text spoken by TTS after chime (or Indonesian source text)
+  speechLanguage?: SpeechLanguage; // 'id' (default), 'ar' (Arab), 'en' (Inggris), 'jv' (Jawa)
+  speechInputMode?: SpeechInputMode; // 'auto_translate' (AI translates from ID) | 'direct_text' (User provides target language text)
+  translatedSpeechText?: string; // Cached AI translation or user-provided Arabic/English/Javanese text
   chimeType: ChimeType;
   customChimeUrl?: string; // Direct override custom chime audio
   customChimeName?: string;
@@ -80,6 +95,7 @@ export interface AudioSettings {
   chimeVolume: number;
   enableTTS: boolean;
   repeatSpeechCount: number; // 1 or 2 times
+  disabledDays?: DayOfWeek[]; // Days silenced globally for BOTH Bells & Murottal (default: [0] = Minggu)
   useCustomPrefixAudio?: boolean;
   customPrefixAudioUrl?: string;
   customPrefixAudioName?: string;
@@ -90,6 +106,8 @@ export interface AudioSettings {
   defaultChimeId?: string;
   useCustomDefaultChime?: boolean;
   enableGlobalOutroChime?: boolean; // Global closing chime after VO/TTS
+  cloudinaryCloudName?: string;
+  cloudinaryUploadPreset?: string;
   globalOutroChimeType?: ChimeType | 'none' | 'same_as_intro';
   globalOutroChimeUrl?: string;
   globalOutroChimeName?: string;
@@ -106,3 +124,38 @@ export interface TimeSyncInfo {
   nextBellLabel: string | null;
   countdownSeconds: number | null;
 }
+
+export interface MurottalTrack {
+  id: string;
+  title: string;
+  reciter: string;
+  surahNumber?: number;
+  audioUrl: string;
+  durationStr?: string;
+  isCustomUpload?: boolean;
+  fileSizeMb?: number;
+  uploadedAt?: number;
+}
+
+export interface MurottalScheduleSlot {
+  id: string;
+  time: string; // HH:MM format e.g. "06:00", "06:30", "09:45"
+  label: string; // e.g. "Murottal Pagi", "Pertengahan Pelajaran / Istirahat"
+  enabled: boolean;
+  trackId?: string; // Specific surah or uses default
+  days: DayOfWeek[];
+  stopAfterMinutes?: number; // Optional auto-stop duration in minutes
+}
+
+export interface MurottalConfig {
+  enabledAutoPlay: boolean; // Auto-play enabled
+  autoStartTime: string; // "06:00", "06:30", etc.
+  autoStopOnBell: boolean; // Auto pause when bell rings
+  selectedTrackId: string;
+  volume: number; // 0 to 1
+  activeDays: DayOfWeek[]; // [1, 2, 3, 4, 5, 6]
+  repeatMode: 'repeat_one' | 'repeat_all' | 'shuffle';
+  scheduleSlots?: MurottalScheduleSlot[]; // Multiple customizable auto-play schedules
+}
+
+

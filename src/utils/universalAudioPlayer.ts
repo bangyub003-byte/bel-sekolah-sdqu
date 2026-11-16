@@ -1,12 +1,13 @@
 /**
  * Universal Audio Player & Decoder with AudioContext / Web Audio API Fallback
- * 
+ *
  * WHY THIS IS CRUCIAL:
  * 1. Raw AAC stream files (`.aac` / ADTS streams) from Android voice recorders often fail in `new Audio(dataUrl)`
  *    because Chromium/Firefox strict HTML5 <audio> element prefers MP4/M4A containers over raw ADTS AAC.
  * 2. Web Audio API's `AudioContext.decodeAudioData` successfully decodes raw AAC (ADTS), M4A, 3GP, AMR, MP3, WAV, etc.
  *    and plays them directly via Web Audio BufferSource without format rejection.
- * 3. Handles browser AudioContext unlocking / user interaction gesture policy.
+ * 3. Raw PCM (`audio/L16;codec=pcm;rate=24000`) from AI TTS is decoded directly into an AudioBuffer.
+ * 4. Handles browser AudioContext unlocking / user interaction gesture policy cleanly.
  */
 
 let sharedAudioCtx: AudioContext | null = null;
@@ -26,12 +27,117 @@ export function getSharedAudioContext(): AudioContext {
 }
 
 /**
- * Convert a base64 or data URL to an ArrayBuffer
+ * Decode a base64 string into a Uint8Array
+ */
+function base64ToUint8Array(base64: string): Uint8Array {
+  const cleanBase64 = base64.replace(/\s+/g, '');
+  const binaryString = atob(cleanBase64);
+  const len = binaryString.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+  return bytes;
+}
+
+/**
+ * Decode headerless 16-bit signed little-endian PCM data URL (e.g. audio/L16;codec=pcm;rate=24000)
+ */
+function decodeRawPcmDataUrl(ctx: AudioContext, dataUrl: string): AudioBuffer | null {
+  if (!dataUrl.startsWith('data:')) return null;
+  const commaIdx = dataUrl.indexOf(',');
+  if (commaIdx === -1) return null;
+
+  const header = dataUrl.substring(0, commaIdx).toLowerCase();
+  if (!header.includes('audio/l16') && !header.includes('audio/pcm')) {
+    return null;
+  }
+
+  const base64 = dataUrl.substring(commaIdx + 1);
+  const bytes = base64ToUint8Array(base64);
+  if (bytes.byteLength < 2) return null;
+
+  const rateMatch = header.match(/rate=(\d+)/);
+  const sampleRate = rateMatch ? parseInt(rateMatch[1], 10) : 24000;
+  const numSamples = Math.floor(bytes.byteLength / 2);
+
+  const audioBuffer = ctx.createBuffer(1, numSamples, sampleRate);
+  const channelData = audioBuffer.getChannelData(0);
+  const dataView = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+
+  // L16 in HTTP/MIME can sometimes be big-endian, though Gemini PCM is little-endian
+  const isBigEndian = header.includes('endianness=big') || (header.includes('audio/l16') && !header.includes('codec=pcm'));
+
+  for (let i = 0; i < numSamples; i++) {
+    const sample = dataView.getInt16(i * 2, !isBigEndian);
+    channelData[i] = sample / 32768;
+  }
+
+  return audioBuffer;
+}
+
+class AudioSourceValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AudioSourceValidationError';
+  }
+}
+
+/**
+ * Convert a base64, blob, or http(s) URL to an ArrayBuffer
  */
 export async function dataUrlToArrayBuffer(dataUrl: string): Promise<ArrayBuffer> {
-  // If it's a blob URL or http URL
-  if (dataUrl.startsWith('blob:') || dataUrl.startsWith('http')) {
+  if (dataUrl.startsWith('http://') || dataUrl.startsWith('https://')) {
+    const isGoogleDrive =
+      dataUrl.includes('drive.google.com') || dataUrl.includes('drive.usercontent.google.com');
+
+    // For Google Drive, go straight through our proxy if available because Drive blocks browser CORS and uses redirects/HTML tokens
+    if (!isGoogleDrive) {
+      try {
+        const res = await fetch(dataUrl);
+        if (res.ok) {
+          const contentType = (res.headers.get('content-type') || '').toLowerCase();
+          if (contentType.includes('text/html')) {
+            throw new AudioSourceValidationError('Link mengarah ke halaman web/HTML, bukan file audio langsung.');
+          }
+          return await res.arrayBuffer();
+        }
+      } catch (err) {
+        if (err instanceof AudioSourceValidationError) throw err;
+        // CORS or network error -> try server proxy below
+      }
+    }
+
+    // Try server-side proxy endpoint (/api/audio/proxy)
+    try {
+      const proxyRes = await fetch(`/api/audio/proxy?url=${encodeURIComponent(dataUrl)}`);
+      if (proxyRes.ok) {
+        const contentType = (proxyRes.headers.get('content-type') || '').toLowerCase();
+        if (contentType.includes('application/json') || contentType.includes('text/html')) {
+          throw new AudioSourceValidationError('Sumber tautan bukan berkas audio yang valid.');
+        }
+        return await proxyRes.arrayBuffer();
+      }
+
+      if (proxyRes.status === 400 || proxyRes.status === 403 || proxyRes.status === 413 || proxyRes.status === 422 || proxyRes.status === 502) {
+        const errJson = await proxyRes.json().catch(() => null);
+        throw new AudioSourceValidationError(
+          errJson?.error || `Tautan audio tidak dapat dimuat (HTTP ${proxyRes.status}).`
+        );
+      }
+    } catch (proxyErr) {
+      if (proxyErr instanceof AudioSourceValidationError) throw proxyErr;
+      // Proxy route unavailable (e.g., pure static hosting without server) -> fall through to HTML5 <audio>
+    }
+
+    throw new Error('Perlu fallback ke pemutar audio browser.');
+  }
+
+  if (dataUrl.startsWith('blob:')) {
     const res = await fetch(dataUrl);
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status} saat memuat audio`);
+    }
     return await res.arrayBuffer();
   }
 
@@ -39,17 +145,15 @@ export async function dataUrlToArrayBuffer(dataUrl: string): Promise<ArrayBuffer
   const base64Index = dataUrl.indexOf('base64,');
   if (base64Index !== -1) {
     const base64 = dataUrl.substring(base64Index + 7);
-    const binaryString = atob(base64);
-    const len = binaryString.length;
-    const bytes = new Uint8Array(len);
-    for (let i = 0; i < len; i++) {
-      bytes[i] = binaryString.charCodeAt(i);
-    }
-    return bytes.buffer;
+    const bytes = base64ToUint8Array(base64);
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
   }
 
-  // Raw fetch fallback
+  // Raw fetch fallback (e.g. relative /audio/... paths)
   const res = await fetch(dataUrl);
+  if (!res.ok) {
+    throw new Error(`Gagal memuat sumber audio (${res.status})`);
+  }
   return await res.arrayBuffer();
 }
 
@@ -59,8 +163,11 @@ export async function dataUrlToArrayBuffer(dataUrl: string): Promise<ArrayBuffer
 export function stopAllCustomAudio(): void {
   if (currentHtmlAudio) {
     try {
+      currentHtmlAudio.onerror = null;
+      currentHtmlAudio.onended = null;
       currentHtmlAudio.pause();
-      currentHtmlAudio.currentTime = 0;
+      currentHtmlAudio.removeAttribute('src');
+      currentHtmlAudio.load();
     } catch {}
     currentHtmlAudio = null;
   }
@@ -72,11 +179,18 @@ export function stopAllCustomAudio(): void {
     } catch {}
     currentSourceNode = null;
   }
+
+  if (currentGainNode) {
+    try {
+      currentGainNode.disconnect();
+    } catch {}
+    currentGainNode = null;
+  }
 }
 
 /**
- * Play audio file using HTML5 Audio with automatic fallback to Web Audio API (decodeAudioData).
- * This ensures Android AAC (.acc/.aac), M4A, 3GP, and all mobile voice recordings play reliably without error.
+ * Play audio file using Web Audio API with safe HTML5 Audio fallback.
+ * Supports raw AAC (.aac/.acc), M4A, 3GP, MP3, WAV, OGG, raw PCM (L16), and cloud URLs.
  */
 export async function playUniversalAudio(
   dataUrl: string,
@@ -85,24 +199,35 @@ export async function playUniversalAudio(
 ): Promise<() => void> {
   stopAllCustomAudio();
 
+  if (!dataUrl || typeof dataUrl !== 'string' || !dataUrl.trim()) {
+    onEnded?.();
+    return () => {};
+  }
+
+  const trimmedUrl = dataUrl.trim();
   const safeVolume = Math.min(1.0, Math.max(0, volume));
 
-  // Try Method 1: Web Audio API (Direct PCM/AAC Decoding - Most robust for raw AAC & mobile recordings)
+  // Method 1: Web Audio API (Direct PCM or decodeAudioData)
   try {
     const ctx = getSharedAudioContext();
     if (ctx.state === 'suspended') {
       await ctx.resume().catch(() => {});
     }
 
-    const arrayBuffer = await dataUrlToArrayBuffer(dataUrl);
-    // decodeAudioData consumes the buffer, so slice a copy to be safe
-    const decodedBuffer = await new Promise<AudioBuffer>((resolve, reject) => {
-      ctx.decodeAudioData(
-        arrayBuffer.slice(0),
-        (buf) => resolve(buf),
-        (err) => reject(err)
-      );
-    });
+    let decodedBuffer = decodeRawPcmDataUrl(ctx, trimmedUrl);
+    if (!decodedBuffer) {
+      const arrayBuffer = await dataUrlToArrayBuffer(trimmedUrl);
+      if (arrayBuffer.byteLength === 0) {
+        throw new AudioSourceValidationError('Berkas audio kosong (0 byte).');
+      }
+      decodedBuffer = await new Promise<AudioBuffer>((resolve, reject) => {
+        ctx.decodeAudioData(
+          arrayBuffer.slice(0),
+          (buf) => resolve(buf),
+          (err) => reject(err || new Error('Format audio tidak dapat didekode oleh Web Audio API'))
+        );
+      });
+    }
 
     const source = ctx.createBufferSource();
     source.buffer = decodedBuffer;
@@ -123,6 +248,9 @@ export async function playUniversalAudio(
       if (currentSourceNode === source) {
         currentSourceNode = null;
       }
+      if (currentGainNode === gainNode) {
+        currentGainNode = null;
+      }
       onEnded?.();
     };
 
@@ -136,52 +264,105 @@ export async function playUniversalAudio(
           source.stop();
           source.disconnect();
         } catch {}
+        try {
+          gainNode.disconnect();
+        } catch {}
+        if (currentSourceNode === source) currentSourceNode = null;
+        if (currentGainNode === gainNode) currentGainNode = null;
       }
     };
-  } catch (webAudioErr) {
-    console.warn('Web Audio API decoding fallback to HTML5 Audio element:', webAudioErr);
+  } catch (webAudioErr: any) {
+    // If validation already proved the URL is invalid/private HTML or 0-byte, do not feed it to HTML5 <audio>
+    if (webAudioErr instanceof AudioSourceValidationError) {
+      console.warn('Audio validation notice:', webAudioErr.message);
+      onEnded?.();
+      throw webAudioErr;
+    }
 
-    // Method 2: Fallback to HTML5 Audio Element
-    return new Promise((resolve) => {
+    console.warn('Web Audio API decoding fallback to HTML5 Audio element:', webAudioErr?.message || webAudioErr);
+
+    // Method 2: Safe Fallback to HTML5 Audio Element (useful for public MP3/WAV URLs without CORS)
+    return new Promise((resolve, reject) => {
+      let settled = false;
+
       try {
         const audio = new Audio();
-        audio.src = dataUrl;
+        audio.preload = 'auto';
         audio.volume = safeVolume;
         currentHtmlAudio = audio;
 
         let stopped = false;
+        const cleanup = () => {
+          audio.onerror = null;
+          audio.onended = null;
+        };
+
         const stopFn = () => {
           if (stopped) return;
           stopped = true;
-          audio.pause();
-          audio.currentTime = 0;
-          currentHtmlAudio = null;
+          cleanup();
+          try {
+            audio.pause();
+            audio.removeAttribute('src');
+            audio.load();
+          } catch {}
+          if (currentHtmlAudio === audio) {
+            currentHtmlAudio = null;
+          }
+        };
+
+        const failPlayback = (reason: string) => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          if (currentHtmlAudio === audio) {
+            currentHtmlAudio = null;
+          }
+          console.warn('HTML5 Audio playback unavailable:', reason);
+          onEnded?.();
+          reject(new Error(reason));
         };
 
         audio.onended = () => {
-          currentHtmlAudio = null;
-          onEnded?.();
-        };
-
-        audio.onerror = (e) => {
-          console.error('HTML5 Audio fallback error:', e);
-          currentHtmlAudio = null;
-          onEnded?.();
-        };
-
-        audio
-          .play()
-          .then(() => resolve(stopFn))
-          .catch((err) => {
-            console.error('HTML5 Audio play failed:', err);
+          cleanup();
+          if (currentHtmlAudio === audio) {
             currentHtmlAudio = null;
-            onEnded?.();
-            resolve(stopFn);
-          });
-      } catch (err) {
-        console.error('All audio playback methods failed:', err);
-        onEnded?.();
-        resolve(() => {});
+          }
+          onEnded?.();
+        };
+
+        audio.onerror = () => {
+          const mediaErr = audio.error;
+          const reason = mediaErr
+            ? `Sumber audio tidak didukung atau gagal dimuat (kode ${mediaErr.code})`
+            : 'Sumber audio tidak didukung atau gagal dimuat';
+          failPlayback(reason);
+        };
+
+        audio.src = trimmedUrl;
+
+        const playPromise = audio.play();
+        if (playPromise !== undefined) {
+          playPromise
+            .then(() => {
+              if (settled) return;
+              settled = true;
+              resolve(stopFn);
+            })
+            .catch((err) => {
+              failPlayback(err?.message || 'Gagal memutar sumber audio');
+            });
+        } else {
+          settled = true;
+          resolve(stopFn);
+        }
+      } catch (err: any) {
+        if (!settled) {
+          settled = true;
+          console.warn('All audio playback methods failed:', err?.message || err);
+          onEnded?.();
+          reject(err instanceof Error ? err : new Error('Gagal memutar audio'));
+        }
       }
     });
   }
