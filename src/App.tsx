@@ -1124,6 +1124,20 @@ export default function App() {
     }
   }
 
+  // Current or most recent scheduled bell earlier today (for quick manual replay button near clock/date)
+  let latestScheduleItem: ScheduleItem | null = null;
+  const todayScheduledSorted = schedules
+    .filter((item) => item.enabled && item.days.includes(todayDayNum))
+    .sort((a, b) => a.time.localeCompare(b.time));
+
+  for (const item of todayScheduledSorted) {
+    const [hStr, mStr] = item.time.split(':');
+    const targetSecsTotal = parseInt(hStr, 10) * 3600 + parseInt(mStr, 10) * 60;
+    if (targetSecsTotal <= currentSecsTotal) {
+      latestScheduleItem = item;
+    }
+  }
+
   // Quick Test Bell
   const handleQuickTestBell = async () => {
     if (murottalConfigRef.current.autoStopOnBell !== false && murottalAudioRef.current && !murottalAudioRef.current.paused) {
@@ -1367,6 +1381,8 @@ export default function App() {
           onManualSync={performTimeSync}
           nextScheduleItem={nextScheduleItem}
           countdownSeconds={countdownSeconds}
+          latestScheduleItem={latestScheduleItem}
+          onTriggerScheduleBell={handleTestScheduleItem}
           disabledDays={disabledDays}
           onToggleDisabledDay={handleToggleDisabledDay}
         />

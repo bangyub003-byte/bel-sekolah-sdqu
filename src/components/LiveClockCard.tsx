@@ -23,6 +23,8 @@ interface LiveClockCardProps {
   onManualSync: () => void;
   nextScheduleItem: ScheduleItem | null;
   countdownSeconds: number | null;
+  latestScheduleItem?: ScheduleItem | null;
+  onTriggerScheduleBell?: (item: ScheduleItem) => void;
   disabledDays?: DayOfWeek[];
   onToggleDisabledDay?: (day: DayOfWeek) => void;
 }
@@ -36,6 +38,8 @@ export const LiveClockCard: React.FC<LiveClockCardProps> = ({
   onManualSync,
   nextScheduleItem,
   countdownSeconds,
+  latestScheduleItem,
+  onTriggerScheduleBell,
   disabledDays = [0],
   onToggleDisabledDay,
 }) => {
@@ -131,6 +135,17 @@ export const LiveClockCard: React.FC<LiveClockCardProps> = ({
               <span className="text-[11px] bg-slate-100 text-slate-700 px-2 py-0.5 rounded-lg border border-slate-200 font-mono">
                 SD QUR'AN UNGGULAN
               </span>
+              {latestScheduleItem && onTriggerScheduleBell && (
+                <button
+                  type="button"
+                  onClick={() => onTriggerScheduleBell(latestScheduleItem)}
+                  title={`Bunyikan bel jadwal saat ini / sebelumnya (${latestScheduleItem.time} - ${latestScheduleItem.label})`}
+                  className="inline-flex items-center gap-1 text-[11px] font-bold text-blue-700 hover:text-white bg-blue-50 hover:bg-blue-600 px-2 py-0.5 rounded-lg border border-blue-200 hover:border-blue-600 transition-all cursor-pointer shadow-2xs active:scale-95"
+                >
+                  <Bell className="w-3 h-3" />
+                  <span>Bel {latestScheduleItem.time}</span>
+                </button>
+              )}
             </div>
           </div>
 
