@@ -144,6 +144,9 @@ export default function App() {
 
   const murottalAudioRef = useRef<HTMLAudioElement | null>(null);
   const firedMurottalKeysRef = useRef<Set<string>>(new Set());
+  const isFadingMurottalRef = useRef<boolean>(false);
+  const fadeIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const fadeTargetBellKeyRef = useRef<string | null>(null);
 
   // Today's Day of Week (0 = Minggu, 1 = Senin, ..., 6 = Sabtu)
   const todayDayNum = getDayOfWeekNumber(currentTime) as DayOfWeek;
@@ -164,6 +167,7 @@ export default function App() {
   const murottalConfigRef = useRef<MurottalConfig>(murottalConfig);
   const triggerAutomaticBellRef = useRef<(item: ScheduleItem, dayNum: DayOfWeek) => Promise<void>>(async () => {});
   const handlePlayMurottalTrackRef = useRef<(track: MurottalTrack) => void>(() => {});
+  const fadeOutAndStopMurottalRef = useRef<(durationMs?: number) => Promise<void>>(async () => {});
 
   useEffect(() => {
     schedulesRef.current = schedules;
@@ -211,7 +215,7 @@ export default function App() {
     } catch (err) {
       console.error('Error saving murottal config:', err);
     }
-    if (murottalAudioRef.current) {
+    if (murottalAudioRef.current && !isFadingMurottalRef.current) {
       murottalAudioRef.current.volume = murottalConfig.volume;
     }
   }, [murottalConfig]);
@@ -394,6 +398,40 @@ export default function App() {
           }
         });
 
+        // 1b. Pre-Bell Smooth Murottal Fade-Out (~9s before any scheduled bell such as 07:00)
+        // Ensures Qur'an recitation fades out gently & stops completely BEFORE the bell strikes
+        if (
+          currentMurottal.autoStopOnBell !== false &&
+          murottalAudioRef.current &&
+          !murottalAudioRef.current.paused &&
+          !isFadingMurottalRef.current
+        ) {
+          const nowTotalSecs =
+            now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+          const enabledTodayBells = currentSchedules.filter(
+            (item) => item.enabled && item.days.includes(dayNum)
+          );
+
+          for (const bell of enabledTodayBells) {
+            const [bhStr, bmStr] = bell.time.split(':');
+            const bellSecs = parseInt(bhStr, 10) * 3600 + parseInt(bmStr, 10) * 60;
+            const diffSecs = bellSecs - nowTotalSecs;
+            const upcomingBellKey = `${dateKey}-${bell.time}`;
+
+            if (
+              diffSecs > 0 &&
+              diffSecs <= 10 &&
+              !firedMinutesRef.current.has(upcomingBellKey) &&
+              fadeTargetBellKeyRef.current !== upcomingBellKey
+            ) {
+              fadeTargetBellKeyRef.current = upcomingBellKey;
+              const fadeDurationMs = Math.max(1500, Math.round((diffSecs - 0.8) * 1000));
+              fadeOutAndStopMurottalRef.current(fadeDurationMs);
+              break;
+            }
+          }
+        }
+
         // 2. Check Scheduled Bells for current HH:MM — strictly ONCE per minute (prevents duplicate readings)
         const minuteKey = `${dateKey}-${currentHHMM}`;
         if (!firedMinutesRef.current.has(minuteKey)) {
@@ -441,9 +479,77 @@ export default function App() {
     return () => clearInterval(clockInterval);
   }, []);
 
+  const clearMurottalFade = () => {
+    if (fadeIntervalRef.current) {
+      clearInterval(fadeIntervalRef.current);
+      fadeIntervalRef.current = null;
+    }
+    isFadingMurottalRef.current = false;
+  };
+
+  // Gently fade murottal volume down to 0 and pause cleanly so verses never cut off abruptly
+  const fadeOutAndStopMurottal = (durationMs = 8000): Promise<void> => {
+    return new Promise((resolve) => {
+      const audio = murottalAudioRef.current;
+      if (!audio || audio.paused) {
+        clearMurottalFade();
+        setIsMurottalPlaying(false);
+        resolve();
+        return;
+      }
+
+      if (fadeIntervalRef.current) {
+        clearInterval(fadeIntervalRef.current);
+        fadeIntervalRef.current = null;
+      }
+
+      isFadingMurottalRef.current = true;
+      const startVolume = Math.max(0, Math.min(1, audio.volume || murottalConfigRef.current.volume || 0.7));
+      if (startVolume <= 0.005) {
+        audio.volume = 0;
+        audio.pause();
+        clearMurottalFade();
+        setIsMurottalPlaying(false);
+        resolve();
+        return;
+      }
+
+      const startTime = Date.now();
+      const stepMs = 60;
+
+      fadeIntervalRef.current = setInterval(() => {
+        const elapsed = Date.now() - startTime;
+        const progress = Math.min(1, elapsed / Math.max(300, durationMs));
+
+        if (!murottalAudioRef.current || murottalAudioRef.current !== audio || audio.paused) {
+          clearMurottalFade();
+          setIsMurottalPlaying(false);
+          resolve();
+          return;
+        }
+
+        // Smooth natural acoustic fade curve so volume drops progressively and softly to silence
+        const easedGain = Math.pow(1 - progress, 1.5);
+        audio.volume = Math.max(0, Math.min(1, startVolume * easedGain));
+
+        if (progress >= 1) {
+          audio.volume = 0;
+          audio.pause();
+          clearMurottalFade();
+          setIsMurottalPlaying(false);
+          resolve();
+        }
+      }, stepMs);
+    });
+  };
+
+  fadeOutAndStopMurottalRef.current = fadeOutAndStopMurottal;
+
   // Murottal Audio Controls
   const handlePlayMurottalTrack = (track: MurottalTrack) => {
     try {
+      clearMurottalFade();
+      fadeTargetBellKeyRef.current = null;
       setActiveMurottalTrack(track);
       setIsAudioUnlocked(true);
 
@@ -476,7 +582,12 @@ export default function App() {
       };
 
       audio.onended = () => {
-        if (murottalConfig.repeatMode === 'repeat_one') {
+        if (isFadingMurottalRef.current) {
+          clearMurottalFade();
+          setIsMurottalPlaying(false);
+          return;
+        }
+        if (murottalConfigRef.current.repeatMode === 'repeat_one') {
           audio.currentTime = 0;
           audio.play().catch(() => {});
         } else {
@@ -517,6 +628,7 @@ export default function App() {
   };
 
   const handlePauseMurottal = () => {
+    clearMurottalFade();
     if (murottalAudioRef.current) {
       murottalAudioRef.current.pause();
     }
@@ -524,7 +636,10 @@ export default function App() {
   };
 
   const handleResumeMurottal = () => {
+    clearMurottalFade();
+    fadeTargetBellKeyRef.current = null;
     if (murottalAudioRef.current) {
+      murottalAudioRef.current.volume = Math.max(0, Math.min(1.0, murottalConfigRef.current.volume));
       murottalAudioRef.current.play().then(() => {
         setIsMurottalPlaying(true);
       }).catch(() => {});
@@ -534,18 +649,26 @@ export default function App() {
   };
 
   const handleStopMurottal = () => {
+    clearMurottalFade();
+    fadeTargetBellKeyRef.current = null;
     if (murottalAudioRef.current) {
       murottalAudioRef.current.pause();
       murottalAudioRef.current.currentTime = 0;
+      murottalAudioRef.current.volume = Math.max(0, Math.min(1.0, murottalConfigRef.current.volume));
     }
     setIsMurottalPlaying(false);
   };
 
   // Trigger Automatic Bell
   const triggerAutomaticBell = async (item: ScheduleItem, dayNum: DayOfWeek) => {
-    // If murottal is currently playing and auto-stop on bell is enabled, pause it smoothly
-    if (murottalConfig.autoStopOnBell && isMurottalPlaying) {
-      handlePauseMurottal();
+    // If murottal is still fading or playing when the bell triggers, let it fade smoothly to silence first
+    if (murottalConfigRef.current.autoStopOnBell !== false) {
+      if (isFadingMurottalRef.current) {
+        await new Promise((res) => setTimeout(res, 900));
+      }
+      if (murottalAudioRef.current && !murottalAudioRef.current.paused) {
+        await fadeOutAndStopMurottal(1800);
+      }
     }
 
     const fullText = `${audioSettings.globalPrefix}${item.speechText}`;
@@ -631,8 +754,8 @@ export default function App() {
 
   // Quick Test Bell
   const handleQuickTestBell = async () => {
-    if (murottalConfig.autoStopOnBell && isMurottalPlaying) {
-      handlePauseMurottal();
+    if (murottalConfigRef.current.autoStopOnBell !== false && murottalAudioRef.current && !murottalAudioRef.current.paused) {
+      await fadeOutAndStopMurottal(1800);
     }
 
     const testText = `${audioSettings.globalPrefix}saatnya jam pelajaran ke-1, Tahfidzul Qur'an. Ini adalah tes uji coba bell otomatis.`;
@@ -655,8 +778,8 @@ export default function App() {
 
   // Test Row Schedule Item
   const handleTestScheduleItem = async (item: ScheduleItem) => {
-    if (murottalConfig.autoStopOnBell && isMurottalPlaying) {
-      handlePauseMurottal();
+    if (murottalConfigRef.current.autoStopOnBell !== false && murottalAudioRef.current && !murottalAudioRef.current.paused) {
+      await fadeOutAndStopMurottal(1800);
     }
 
     const fullText = `${audioSettings.globalPrefix}${item.speechText}`;
