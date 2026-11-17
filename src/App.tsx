@@ -557,11 +557,22 @@ export default function App() {
     }, 450);
   }, [schedules, audioSettings, murottalConfig, cloudUser]);
 
+  const isSigningInRef = useRef<boolean>(false);
+
   const handleCloudLogin = async () => {
+    if (isSigningInRef.current) return;
+    isSigningInRef.current = true;
     try {
       await signInWithPopup(auth, googleProvider);
-    } catch (err) {
-      console.error('Google Sign-In error:', err);
+    } catch (err: any) {
+      const code = err?.code || '';
+      if (code === 'auth/cancelled-popup-request' || code === 'auth/popup-closed-by-user') {
+        console.warn('Google Sign-In popup ditutup atau dibatalkan oleh pengguna.');
+      } else {
+        console.error('Google Sign-In error:', err);
+      }
+    } finally {
+      isSigningInRef.current = false;
     }
   };
 
