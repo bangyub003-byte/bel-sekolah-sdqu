@@ -1,0 +1,236 @@
+{
+  "entities": {
+    "SchoolConfig": {
+      "title": "SchoolConfig",
+      "description": "Shared non-PII configuration document for SD QUR'AN UNGGULAN school bell audio settings and murottal config.",
+      "type": "object",
+      "properties": {
+        "schoolId": {
+          "type": "string",
+          "description": "Unique identifier for the school configuration (e.g., sd-quran-unggulan).",
+          "minLength": 2,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "schoolName": {
+          "type": "string",
+          "description": "Display name of the school.",
+          "minLength": 2,
+          "maxLength": 120
+        },
+        "ownerId": {
+          "type": "string",
+          "description": "UID of the verified admin who initialized the school config.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "isPublicBroadcast": {
+          "type": "boolean",
+          "description": "Allows school speaker PCs and client tabs to receive live bell configuration updates."
+        },
+        "audioSettings": {
+          "type": "object",
+          "description": "Global audio, TTS, disabledDays, and chime settings map."
+        },
+        "murottalConfig": {
+          "type": "object",
+          "description": "Automatic murottal schedule and volume configuration map."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server last update timestamp."
+        }
+      },
+      "required": [
+        "schoolId",
+        "schoolName",
+        "ownerId",
+        "isPublicBroadcast",
+        "audioSettings",
+        "murottalConfig",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "ScheduleItem": {
+      "title": "ScheduleItem",
+      "description": "Individual school bell schedule entry synchronized across all connected tabs and devices.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "schoolId": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "isPublicBroadcast": {
+          "type": "boolean"
+        },
+        "time": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 10,
+          "pattern": "^[0-2][0-9]:[0-5][0-9]$"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "category": {
+          "type": "string",
+          "enum": ["lesson", "break", "prayer", "assembly", "dismissal", "custom"]
+        },
+        "speechText": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "speechLanguage": {
+          "type": "string",
+          "enum": ["id", "ar", "en", "jv"]
+        },
+        "speechInputMode": {
+          "type": "string",
+          "enum": ["auto_translate", "direct_text"]
+        },
+        "translatedSpeechText": {
+          "type": "string",
+          "maxLength": 2500
+        },
+        "chimeType": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "customChimeUrl": {
+          "type": "string",
+          "maxLength": 250000
+        },
+        "customChimeName": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "enableOutroChime": {
+          "type": "boolean"
+        },
+        "outroChimeType": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "customOutroChimeUrl": {
+          "type": "string",
+          "maxLength": 250000
+        },
+        "customOutroChimeName": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "days": {
+          "type": "array"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "volume": {
+          "type": "number"
+        },
+        "audioType": {
+          "type": "string",
+          "enum": ["tts", "recording", "cloned"]
+        },
+        "customAudioUrl": {
+          "type": "string",
+          "maxLength": 250000
+        },
+        "customAudioName": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "clonedVoiceId": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "schoolId",
+        "ownerId",
+        "isPublicBroadcast",
+        "time",
+        "label",
+        "category",
+        "speechText",
+        "chimeType",
+        "days",
+        "enabled",
+        "volume",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "AdminMember": {
+      "title": "AdminMember",
+      "description": "Authorized school operator UID allowlist.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "grantedBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "grantedBy", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/schools/{schoolId}": {
+      "schema": { "$ref": "#/entities/SchoolConfig" },
+      "description": "Shared global audio & murottal configuration for a school."
+    },
+    "/schools/{schoolId}/schedules/{scheduleId}": {
+      "schema": { "$ref": "#/entities/ScheduleItem" },
+      "description": "Real-time bell schedule items under a school configuration."
+    },
+    "/admins/{adminUid}": {
+      "schema": { "$ref": "#/entities/AdminMember" },
+      "description": "Authorized operator/admin UID records."
+    }
+  }
+}

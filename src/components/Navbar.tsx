@@ -13,6 +13,10 @@ import {
   BookOpen,
   ChevronDown,
   ChevronUp,
+  Cloud,
+  CloudUpload,
+  LogIn,
+  LogOut,
 } from 'lucide-react';
 import { TimeSyncInfo } from '../types';
 
@@ -23,6 +27,11 @@ interface NavbarProps {
   onQuickTestBell: () => void;
   isAudioUnlocked: boolean;
   isMurottalPlaying?: boolean;
+  cloudAuthEmail?: string | null;
+  cloudStatus?: 'connecting' | 'synced' | 'syncing' | 'error';
+  onCloudLogin?: () => void;
+  onCloudLogout?: () => void;
+  onForcePushCloud?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -32,6 +41,11 @@ export const Navbar: React.FC<NavbarProps> = ({
   onQuickTestBell,
   isAudioUnlocked,
   isMurottalPlaying,
+  cloudAuthEmail,
+  cloudStatus = 'connecting',
+  onCloudLogin,
+  onCloudLogout,
+  onForcePushCloud,
 }) => {
   const [isMenuCollapsed, setIsMenuCollapsed] = useState(false);
 
@@ -84,6 +98,45 @@ export const Navbar: React.FC<NavbarProps> = ({
               <span className={`w-2 h-2 rounded-full ${isAudioUnlocked ? 'bg-emerald-400 animate-ping' : 'bg-amber-400'}`}></span>
               <span>{isAudioUnlocked ? 'Audio Aktif' : 'Aktifkan Audio'}</span>
             </div>
+
+            {/* Compact Cloud Real-Time Sync Pill */}
+            {cloudAuthEmail ? (
+              <div className="flex items-center gap-1.5 bg-white/15 backdrop-blur-sm px-2.5 py-1 rounded-full border border-white/25 text-xs">
+                <Cloud className={`w-3.5 h-3.5 ${cloudStatus === 'syncing' ? 'text-amber-300 animate-pulse' : cloudStatus === 'error' ? 'text-rose-300' : 'text-emerald-300'}`} />
+                <span className="font-bold text-white hidden sm:inline">
+                  {cloudStatus === 'syncing' ? 'Menyimpan...' : 'Cloud Sync'}
+                </span>
+                {onForcePushCloud && (
+                  <button
+                    onClick={onForcePushCloud}
+                    title="Kirim pengaturan perangkat ini ke semua perangkat (Cloud)"
+                    className="p-0.5 rounded hover:bg-white/20 text-blue-100 hover:text-white transition cursor-pointer"
+                  >
+                    <CloudUpload className="w-3.5 h-3.5" />
+                  </button>
+                )}
+                {onCloudLogout && (
+                  <button
+                    onClick={onCloudLogout}
+                    title={`Keluar (${cloudAuthEmail})`}
+                    className="p-0.5 rounded hover:bg-white/20 text-blue-100 hover:text-white transition cursor-pointer"
+                  >
+                    <LogOut className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
+            ) : (
+              onCloudLogin && (
+                <button
+                  onClick={onCloudLogin}
+                  title="Masuk akun Google Admin untuk menyinkronkan editan ke semua perangkat & tab"
+                  className="flex items-center gap-1.5 bg-white/15 hover:bg-white/25 backdrop-blur-sm px-2.5 py-1 rounded-full border border-white/25 text-xs font-bold text-white transition cursor-pointer"
+                >
+                  <LogIn className="w-3.5 h-3.5 text-amber-300" />
+                  <span>Login Sync</span>
+                </button>
+              )
+            )}
           </div>
         </div>
       </div>

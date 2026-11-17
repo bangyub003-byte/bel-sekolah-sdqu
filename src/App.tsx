@@ -25,6 +25,13 @@ import {
   getAudioContext,
 } from './utils/audioSynth';
 
+import { onAuthStateChanged, signInWithPopup, signOut, User } from 'firebase/auth';
+import { auth, googleProvider } from './firebase';
+import {
+  pushAllSchedulesToCloud,
+  pushSchoolConfigToCloud,
+  subscribeToCloudBellData,
+} from './utils/cloudSync';
 import { Navbar } from './components/Navbar';
 import { AudioPermissionBanner } from './components/AudioPermissionBanner';
 import { LiveClockCard } from './components/LiveClockCard';
@@ -186,6 +193,23 @@ export default function App() {
     logs: '',
     murottal: '',
   });
+
+  // Firebase Cloud Real-Time Sync State & Refs
+  const [cloudUser, setCloudUser] = useState<User | null>(null);
+  const [cloudStatus, setCloudStatus] = useState<'connecting' | 'synced' | 'syncing' | 'error'>('connecting');
+  const cloudSchoolExistsRef = useRef<boolean | null>(null);
+  const cloudHadSchedulesRef = useRef<boolean>(false);
+  const knownCloudScheduleIdsRef = useRef<Set<string>>(new Set());
+  const skipNextCloudPushRef = useRef<{
+    schedules: boolean;
+    settings: boolean;
+    murottal: boolean;
+  }>({
+    schedules: false,
+    settings: false,
+    murottal: false,
+  });
+  const cloudWriteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     schedulesRef.current = schedules;
@@ -370,6 +394,192 @@ export default function App() {
       murottalAudioRef.current.volume = murottalConfig.volume;
     }
   }, [murottalConfig]);
+
+  // Firebase Auth & Real-Time Firestore Cross-Device Synchronization
+  const pushAllLocalStateToCloud = async (uid: string) => {
+    try {
+      setCloudStatus('syncing');
+      await pushSchoolConfigToCloud(
+        audioSettingsRef.current,
+        murottalConfigRef.current,
+        uid
+      );
+      cloudSchoolExistsRef.current = true;
+      const nextIds = await pushAllSchedulesToCloud(
+        schedulesRef.current,
+        knownCloudScheduleIdsRef.current,
+        uid
+      );
+      knownCloudScheduleIdsRef.current = nextIds;
+      setCloudStatus('synced');
+    } catch (err) {
+      console.error('Failed to push state to cloud:', err);
+      setCloudStatus('error');
+    }
+  };
+
+  useEffect(() => {
+    const unsubAuth = onAuthStateChanged(auth, (user) => {
+      setCloudUser(user);
+      if (user && user.emailVerified && cloudSchoolExistsRef.current === false) {
+        pushAllLocalStateToCloud(user.uid);
+      }
+    });
+
+    const unsubCloud = subscribeToCloudBellData(
+      (schoolData) => {
+        cloudSchoolExistsRef.current = schoolData.exists;
+        if (!schoolData.exists) {
+          if (auth.currentUser && auth.currentUser.emailVerified) {
+            pushAllLocalStateToCloud(auth.currentUser.uid);
+          } else {
+            setCloudStatus('synced');
+          }
+          return;
+        }
+
+        if (schoolData.audioSettings) {
+          const currentLocal = audioSettingsRef.current;
+          const mergedSettings: AudioSettings = {
+            ...currentLocal,
+            ...schoolData.audioSettings,
+            customPrefixAudioUrl:
+              schoolData.audioSettings.customPrefixAudioUrl || currentLocal.customPrefixAudioUrl,
+            globalOutroChimeUrl:
+              schoolData.audioSettings.globalOutroChimeUrl || currentLocal.globalOutroChimeUrl,
+          };
+          const serialized = JSON.stringify(mergedSettings);
+          if (serialized !== JSON.stringify(currentLocal)) {
+            skipNextCloudPushRef.current.settings = true;
+            setAudioSettings(mergedSettings);
+          }
+        }
+
+        if (schoolData.murottalConfig) {
+          const serialized = JSON.stringify(schoolData.murottalConfig);
+          if (serialized !== JSON.stringify(murottalConfigRef.current)) {
+            skipNextCloudPushRef.current.murottal = true;
+            setMurottalConfig(schoolData.murottalConfig);
+          }
+        }
+
+        setCloudStatus('synced');
+      },
+      (cloudSchedules) => {
+        knownCloudScheduleIdsRef.current = new Set(cloudSchedules.map((s) => s.id));
+        if (cloudSchedules.length > 0) {
+          cloudHadSchedulesRef.current = true;
+        }
+        if (cloudSchedules.length > 0 || cloudHadSchedulesRef.current) {
+          const localMap = new Map<string, ScheduleItem>(
+            schedulesRef.current.map((s) => [s.id, s])
+          );
+          const mergedSchedules = cloudSchedules.map((cs) => {
+            const localItem = localMap.get(cs.id);
+            if (!localItem) return cs;
+            return {
+              ...cs,
+              customAudioUrl: cs.customAudioUrl || localItem.customAudioUrl,
+              customChimeUrl: cs.customChimeUrl || localItem.customChimeUrl,
+              customOutroChimeUrl: cs.customOutroChimeUrl || localItem.customOutroChimeUrl,
+            };
+          });
+          const serialized = JSON.stringify(mergedSchedules);
+          if (serialized !== JSON.stringify(schedulesRef.current)) {
+            skipNextCloudPushRef.current.schedules = true;
+            setSchedules(mergedSchedules);
+          }
+        }
+        setCloudStatus('synced');
+      },
+      () => {
+        setCloudStatus('error');
+      }
+    );
+
+    return () => {
+      unsubAuth();
+      unsubCloud();
+      if (cloudWriteTimerRef.current) {
+        clearTimeout(cloudWriteTimerRef.current);
+      }
+    };
+  }, []);
+
+  // Automatically sync local edits to Cloud Firestore (debounced) when signed in as verified Admin
+  useEffect(() => {
+    if (!cloudUser || !cloudUser.emailVerified) return;
+    const anyLocalEdit =
+      !skipNextCloudPushRef.current.schedules ||
+      !skipNextCloudPushRef.current.settings ||
+      !skipNextCloudPushRef.current.murottal;
+
+    const pushSchedulesNow = !skipNextCloudPushRef.current.schedules;
+    const pushConfigNow =
+      !skipNextCloudPushRef.current.settings || !skipNextCloudPushRef.current.murottal;
+
+    skipNextCloudPushRef.current = {
+      schedules: false,
+      settings: false,
+      murottal: false,
+    };
+
+    if (!anyLocalEdit || cloudSchoolExistsRef.current === null) return;
+
+    if (cloudWriteTimerRef.current) {
+      clearTimeout(cloudWriteTimerRef.current);
+    }
+
+    cloudWriteTimerRef.current = setTimeout(async () => {
+      try {
+        setCloudStatus('syncing');
+        if (pushConfigNow || !cloudSchoolExistsRef.current) {
+          await pushSchoolConfigToCloud(
+            audioSettingsRef.current,
+            murottalConfigRef.current,
+            cloudUser.uid
+          );
+          cloudSchoolExistsRef.current = true;
+        }
+        if (pushSchedulesNow) {
+          const nextIds = await pushAllSchedulesToCloud(
+            schedulesRef.current,
+            knownCloudScheduleIdsRef.current,
+            cloudUser.uid
+          );
+          knownCloudScheduleIdsRef.current = nextIds;
+        }
+        setCloudStatus('synced');
+      } catch (err) {
+        console.error('Cloud auto-sync error:', err);
+        setCloudStatus('error');
+      }
+    }, 450);
+  }, [schedules, audioSettings, murottalConfig, cloudUser]);
+
+  const handleCloudLogin = async () => {
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch (err) {
+      console.error('Google Sign-In error:', err);
+    }
+  };
+
+  const handleCloudLogout = async () => {
+    try {
+      await signOut(auth);
+    } catch (err) {
+      console.error('Google Sign-Out error:', err);
+    }
+  };
+
+  const handleForcePushCloud = async () => {
+    if (!cloudUser || !cloudUser.emailVerified) {
+      await handleCloudLogin();
+      return;
+    }
+    await pushAllLocalStateToCloud(cloudUser.uid);
+  };
 
   // Perform Time Synchronization
   const performTimeSync = async () => {
@@ -1120,6 +1330,11 @@ export default function App() {
         onQuickTestBell={handleQuickTestBell}
         isAudioUnlocked={isAudioUnlocked}
         isMurottalPlaying={isMurottalPlaying}
+        cloudAuthEmail={cloudUser?.email || null}
+        cloudStatus={cloudStatus}
+        onCloudLogin={handleCloudLogin}
+        onCloudLogout={handleCloudLogout}
+        onForcePushCloud={handleForcePushCloud}
       />
 
       {/* Main Container */}

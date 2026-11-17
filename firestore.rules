@@ -1,0 +1,202 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default-deny global catch-all safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Reusable hardened helpers
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isBootstrappedAdmin() {
+      return isVerifiedUser() && request.auth.token.email == 'bangyub003@gmail.com';
+    }
+
+    function isAdmin() {
+      return isBootstrappedAdmin() ||
+        (isVerifiedUser() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
+    }
+
+    function isValidAdmin(data) {
+      return data.keys().hasAll(['uid', 'grantedBy', 'createdAt']) &&
+        data.keys().hasOnly(['uid', 'grantedBy', 'createdAt']) &&
+        isValidId(data.uid) &&
+        data.grantedBy is string && data.grantedBy.size() >= 1 && data.grantedBy.size() <= 128 &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidSchool(data, schoolId) {
+      return data.keys().hasAll([
+          'schoolId', 'schoolName', 'ownerId', 'isPublicBroadcast',
+          'audioSettings', 'murottalConfig', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'schoolId', 'schoolName', 'ownerId', 'isPublicBroadcast',
+          'audioSettings', 'murottalConfig', 'createdAt', 'updatedAt'
+        ]) &&
+        data.schoolId == schoolId &&
+        isValidId(data.schoolId) &&
+        data.schoolId.size() >= 2 && data.schoolId.size() <= 64 &&
+        data.schoolName is string && data.schoolName.size() >= 2 && data.schoolName.size() <= 120 &&
+        isValidId(data.ownerId) &&
+        data.isPublicBroadcast is bool &&
+        data.audioSettings is map &&
+        data.murottalConfig is map &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidSchedule(data, schoolId, scheduleId) {
+      return data.keys().hasAll([
+          'id', 'schoolId', 'ownerId', 'isPublicBroadcast', 'time', 'label',
+          'category', 'speechText', 'chimeType', 'days', 'enabled', 'volume',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'schoolId', 'ownerId', 'isPublicBroadcast', 'time', 'label',
+          'category', 'speechText', 'speechLanguage', 'speechInputMode', 'translatedSpeechText',
+          'chimeType', 'customChimeUrl', 'customChimeName', 'enableOutroChime', 'outroChimeType',
+          'customOutroChimeUrl', 'customOutroChimeName', 'days', 'enabled', 'volume',
+          'audioType', 'customAudioUrl', 'customAudioName', 'clonedVoiceId',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.id == scheduleId &&
+        isValidId(data.id) &&
+        data.schoolId == schoolId &&
+        isValidId(data.schoolId) &&
+        isValidId(data.ownerId) &&
+        data.isPublicBroadcast is bool &&
+        data.time is string && data.time.size() >= 4 && data.time.size() <= 10 &&
+        data.time.matches('^[0-2][0-9]:[0-5][0-9]$') &&
+        data.label is string && data.label.size() >= 1 && data.label.size() <= 160 &&
+        data.category is string && data.category in ['lesson', 'break', 'prayer', 'assembly', 'dismissal', 'custom'] &&
+        data.speechText is string && data.speechText.size() <= 2000 &&
+        (!('speechLanguage' in data) || (data.speechLanguage is string && data.speechLanguage in ['id', 'ar', 'en', 'jv'])) &&
+        (!('speechInputMode' in data) || (data.speechInputMode is string && data.speechInputMode in ['auto_translate', 'direct_text'])) &&
+        (!('translatedSpeechText' in data) || (data.translatedSpeechText is string && data.translatedSpeechText.size() <= 2500)) &&
+        data.chimeType is string && data.chimeType.size() >= 1 && data.chimeType.size() <= 80 &&
+        (!('customChimeUrl' in data) || (data.customChimeUrl is string && data.customChimeUrl.size() <= 250000)) &&
+        (!('customChimeName' in data) || (data.customChimeName is string && data.customChimeName.size() <= 160)) &&
+        (!('enableOutroChime' in data) || data.enableOutroChime is bool) &&
+        (!('outroChimeType' in data) || (data.outroChimeType is string && data.outroChimeType.size() <= 80)) &&
+        (!('customOutroChimeUrl' in data) || (data.customOutroChimeUrl is string && data.customOutroChimeUrl.size() <= 250000)) &&
+        (!('customOutroChimeName' in data) || (data.customOutroChimeName is string && data.customOutroChimeName.size() <= 160)) &&
+        data.days is list && data.days.size() <= 7 && (data.days.size() == 0 || data.days[0] is number) &&
+        data.enabled is bool &&
+        data.volume is number && data.volume >= 0 && data.volume <= 1 &&
+        (!('audioType' in data) || (data.audioType is string && data.audioType in ['tts', 'recording', 'cloned'])) &&
+        (!('customAudioUrl' in data) || (data.customAudioUrl is string && data.customAudioUrl.size() <= 250000)) &&
+        (!('customAudioName' in data) || (data.customAudioName is string && data.customAudioName.size() <= 160)) &&
+        (!('clonedVoiceId' in data) || (data.clonedVoiceId is string && data.clonedVoiceId.size() <= 80)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    // Connection test probe (read-only single doc, writes strictly forbidden)
+    match /test/{docId} {
+      allow get: if docId == 'connection';
+      allow list, create, update, delete: if false;
+    }
+
+    // Authorized Admin Allowlist
+    match /admins/{adminUid} {
+      allow get: if isValidId(adminUid) && (isBootstrappedAdmin() || (isVerifiedUser() && request.auth.uid == adminUid));
+      allow list: if isBootstrappedAdmin();
+      allow create: if isBootstrappedAdmin() &&
+        isValidId(adminUid) &&
+        isValidAdmin(incoming()) &&
+        incoming().uid == adminUid &&
+        incoming().createdAt == request.time;
+      allow update: if false;
+      allow delete: if isBootstrappedAdmin() && isValidId(adminUid);
+    }
+
+    // Shared School Configuration & Real-Time Schedules Subcollection
+    match /schools/{schoolId} {
+      allow get: if isValidId(schoolId) && (
+        (schoolId == 'sd-quran-unggulan' && (resource == null || existing().isPublicBroadcast == true)) ||
+        isAdmin() ||
+        (resource != null && isVerifiedUser() && existing().ownerId == request.auth.uid)
+      );
+      allow list: if isBootstrappedAdmin() || (isVerifiedUser() && existing().ownerId == request.auth.uid);
+      allow create: if isAdmin() &&
+        isValidId(schoolId) &&
+        isValidSchool(incoming(), schoolId) &&
+        incoming().ownerId == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isAdmin() &&
+        isValidId(schoolId) &&
+        isValidSchool(incoming(), schoolId) &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().schoolId == existing().schoolId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'schoolName', 'isPublicBroadcast', 'audioSettings', 'murottalConfig', 'updatedAt'
+        ]);
+      allow delete: if isAdmin() && isValidId(schoolId);
+
+      match /schedules/{scheduleId} {
+        allow get: if isValidId(schoolId) && isValidId(scheduleId) && (
+          (schoolId == 'sd-quran-unggulan' && (resource == null || (existing().isPublicBroadcast == true && existing().schoolId == 'sd-quran-unggulan'))) ||
+          isAdmin() ||
+          (resource != null && isVerifiedUser() && existing().ownerId == request.auth.uid)
+        );
+        allow list: if (existing().isPublicBroadcast == true && existing().schoolId == 'sd-quran-unggulan') ||
+          isBootstrappedAdmin() ||
+          (isVerifiedUser() && existing().ownerId == request.auth.uid);
+        allow create: if isAdmin() &&
+          isValidId(schoolId) &&
+          isValidId(scheduleId) &&
+          exists(/databases/$(database)/documents/schools/$(schoolId)) &&
+          isValidSchedule(incoming(), schoolId, scheduleId) &&
+          incoming().ownerId == request.auth.uid &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time;
+        allow update: if isAdmin() &&
+          isValidId(schoolId) &&
+          isValidId(scheduleId) &&
+          exists(/databases/$(database)/documents/schools/$(schoolId)) &&
+          isValidSchedule(incoming(), schoolId, scheduleId) &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().schoolId == existing().schoolId &&
+          incoming().id == existing().id &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'time', 'label', 'category', 'speechText', 'speechLanguage', 'speechInputMode',
+            'translatedSpeechText', 'chimeType', 'customChimeUrl', 'customChimeName',
+            'enableOutroChime', 'outroChimeType', 'customOutroChimeUrl', 'customOutroChimeName',
+            'days', 'enabled', 'volume', 'audioType', 'customAudioUrl', 'customAudioName',
+            'clonedVoiceId', 'isPublicBroadcast', 'updatedAt'
+          ]);
+        allow delete: if isAdmin() &&
+          isValidId(schoolId) &&
+          isValidId(scheduleId) &&
+          exists(/databases/$(database)/documents/schools/$(schoolId));
+      }
+    }
+  }
+}
