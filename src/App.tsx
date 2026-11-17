@@ -169,6 +169,24 @@ export default function App() {
   const handlePlayMurottalTrackRef = useRef<(track: MurottalTrack) => void>(() => {});
   const fadeOutAndStopMurottalRef = useRef<(durationMs?: number) => Promise<void>>(async () => {});
 
+  const isInitialSchedulesMountRef = useRef<boolean>(true);
+  const isInitialSettingsMountRef = useRef<boolean>(true);
+  const isInitialLogsMountRef = useRef<boolean>(true);
+  const isInitialMurottalMountRef = useRef<boolean>(true);
+  const tabSyncIdRef = useRef<string>(`tab-${Math.random().toString(36).slice(2)}-${Date.now()}`);
+  const syncChannelRef = useRef<BroadcastChannel | null>(null);
+  const lastSerializedRef = useRef<{
+    schedules: string;
+    settings: string;
+    logs: string;
+    murottal: string;
+  }>({
+    schedules: '',
+    settings: '',
+    logs: '',
+    murottal: '',
+  });
+
   useEffect(() => {
     schedulesRef.current = schedules;
   }, [schedules]);
@@ -181,37 +199,170 @@ export default function App() {
     murottalConfigRef.current = murottalConfig;
   }, [murottalConfig]);
 
-  // Persist Schedules
+  // Real-time Multi-Tab Sync (BroadcastChannel + localStorage storage event)
+  useEffect(() => {
+    let channel: BroadcastChannel | null = null;
+    if (typeof BroadcastChannel !== 'undefined') {
+      try {
+        channel = new BroadcastChannel('sd_quran_bell_sync_v1');
+        syncChannelRef.current = channel;
+        channel.onmessage = (event) => {
+          const msg = event?.data;
+          if (!msg || msg.senderId === tabSyncIdRef.current) return;
+          if (msg.type === 'schedules' && Array.isArray(msg.payload)) {
+            const raw = JSON.stringify(msg.payload);
+            if (raw !== lastSerializedRef.current.schedules) {
+              lastSerializedRef.current.schedules = raw;
+              setSchedules(msg.payload);
+            }
+          } else if (msg.type === 'settings' && msg.payload) {
+            const raw = JSON.stringify(msg.payload);
+            if (raw !== lastSerializedRef.current.settings) {
+              lastSerializedRef.current.settings = raw;
+              setAudioSettings(msg.payload);
+            }
+          } else if (msg.type === 'murottal' && msg.payload) {
+            const raw = JSON.stringify(msg.payload);
+            if (raw !== lastSerializedRef.current.murottal) {
+              lastSerializedRef.current.murottal = raw;
+              setMurottalConfig(msg.payload);
+            }
+          } else if (msg.type === 'logs' && Array.isArray(msg.payload)) {
+            const raw = JSON.stringify(msg.payload);
+            if (raw !== lastSerializedRef.current.logs) {
+              lastSerializedRef.current.logs = raw;
+              setBellLogs(msg.payload);
+            }
+          }
+        };
+      } catch {}
+    }
+
+    const handleStorageSync = (e: StorageEvent) => {
+      if (!e.newValue) return;
+      try {
+        if (e.key === LOCAL_STORAGE_KEY_SCHEDULES && e.newValue !== lastSerializedRef.current.schedules) {
+          const parsed = JSON.parse(e.newValue);
+          if (Array.isArray(parsed)) {
+            lastSerializedRef.current.schedules = e.newValue;
+            setSchedules(parsed);
+          }
+        } else if (e.key === LOCAL_STORAGE_KEY_SETTINGS && e.newValue !== lastSerializedRef.current.settings) {
+          const parsed = JSON.parse(e.newValue);
+          if (parsed && typeof parsed === 'object') {
+            lastSerializedRef.current.settings = e.newValue;
+            setAudioSettings(parsed);
+          }
+        } else if (e.key === LOCAL_STORAGE_KEY_MUROTTAL && e.newValue !== lastSerializedRef.current.murottal) {
+          const parsed = JSON.parse(e.newValue);
+          if (parsed && typeof parsed === 'object') {
+            lastSerializedRef.current.murottal = e.newValue;
+            setMurottalConfig(parsed);
+          }
+        } else if (e.key === LOCAL_STORAGE_KEY_LOGS && e.newValue !== lastSerializedRef.current.logs) {
+          const parsed = JSON.parse(e.newValue);
+          if (Array.isArray(parsed)) {
+            lastSerializedRef.current.logs = e.newValue;
+            setBellLogs(parsed);
+          }
+        }
+      } catch {}
+    };
+
+    window.addEventListener('storage', handleStorageSync);
+    return () => {
+      window.removeEventListener('storage', handleStorageSync);
+      if (channel) {
+        try {
+          channel.close();
+        } catch {}
+      }
+      syncChannelRef.current = null;
+    };
+  }, []);
+
+  // Persist Schedules & Broadcast to Other Open Tabs
   useEffect(() => {
     try {
-      localStorage.setItem(LOCAL_STORAGE_KEY_SCHEDULES, JSON.stringify(schedules));
+      const serialized = JSON.stringify(schedules);
+      if (isInitialSchedulesMountRef.current) {
+        isInitialSchedulesMountRef.current = false;
+        lastSerializedRef.current.schedules = serialized;
+      } else if (serialized === lastSerializedRef.current.schedules) {
+        return;
+      }
+      lastSerializedRef.current.schedules = serialized;
+      localStorage.setItem(LOCAL_STORAGE_KEY_SCHEDULES, serialized);
+      syncChannelRef.current?.postMessage({
+        senderId: tabSyncIdRef.current,
+        type: 'schedules',
+        payload: schedules,
+      });
     } catch (err) {
       console.error('Error saving schedules:', err);
     }
   }, [schedules]);
 
-  // Persist Settings
+  // Persist Settings & Broadcast to Other Open Tabs
   useEffect(() => {
     try {
-      localStorage.setItem(LOCAL_STORAGE_KEY_SETTINGS, JSON.stringify(audioSettings));
+      const serialized = JSON.stringify(audioSettings);
+      if (isInitialSettingsMountRef.current) {
+        isInitialSettingsMountRef.current = false;
+        lastSerializedRef.current.settings = serialized;
+      } else if (serialized === lastSerializedRef.current.settings) {
+        return;
+      }
+      lastSerializedRef.current.settings = serialized;
+      localStorage.setItem(LOCAL_STORAGE_KEY_SETTINGS, serialized);
+      syncChannelRef.current?.postMessage({
+        senderId: tabSyncIdRef.current,
+        type: 'settings',
+        payload: audioSettings,
+      });
     } catch (err) {
       console.error('Error saving audio settings:', err);
     }
   }, [audioSettings]);
 
-  // Persist Logs
+  // Persist Logs & Broadcast to Other Open Tabs
   useEffect(() => {
     try {
-      localStorage.setItem(LOCAL_STORAGE_KEY_LOGS, JSON.stringify(bellLogs));
+      const serialized = JSON.stringify(bellLogs);
+      if (isInitialLogsMountRef.current) {
+        isInitialLogsMountRef.current = false;
+        lastSerializedRef.current.logs = serialized;
+      } else if (serialized === lastSerializedRef.current.logs) {
+        return;
+      }
+      lastSerializedRef.current.logs = serialized;
+      localStorage.setItem(LOCAL_STORAGE_KEY_LOGS, serialized);
+      syncChannelRef.current?.postMessage({
+        senderId: tabSyncIdRef.current,
+        type: 'logs',
+        payload: bellLogs,
+      });
     } catch (err) {
       console.error('Error saving logs:', err);
     }
   }, [bellLogs]);
 
-  // Persist Murottal Config
+  // Persist Murottal Config & Broadcast to Other Open Tabs
   useEffect(() => {
     try {
-      localStorage.setItem(LOCAL_STORAGE_KEY_MUROTTAL, JSON.stringify(murottalConfig));
+      const serialized = JSON.stringify(murottalConfig);
+      if (isInitialMurottalMountRef.current) {
+        isInitialMurottalMountRef.current = false;
+        lastSerializedRef.current.murottal = serialized;
+      } else if (serialized !== lastSerializedRef.current.murottal) {
+        lastSerializedRef.current.murottal = serialized;
+        localStorage.setItem(LOCAL_STORAGE_KEY_MUROTTAL, serialized);
+        syncChannelRef.current?.postMessage({
+          senderId: tabSyncIdRef.current,
+          type: 'murottal',
+          payload: murottalConfig,
+        });
+      }
     } catch (err) {
       console.error('Error saving murottal config:', err);
     }
