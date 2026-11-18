@@ -23,10 +23,17 @@ import {
   speakTTS,
   playBellSequence,
   getAudioContext,
+  BellPlaybackState,
+  getBellPlaybackState,
+  subscribeBellPlaybackState,
+  togglePauseBellPlayback,
+  stopAllBellAudio,
 } from './utils/audioSynth';
 
 import { onAuthStateChanged, signInWithPopup, signOut, User } from 'firebase/auth';
 import { auth, googleProvider } from './firebase';
+import firebaseConfig from '../firebase-applet-config.json';
+import { AlertCircle, Check, Copy, ExternalLink, X } from 'lucide-react';
 import {
   pushAllSchedulesToCloud,
   pushSchoolConfigToCloud,
@@ -148,6 +155,11 @@ export default function App() {
   const [activeMurottalTrack, setActiveMurottalTrack] = useState<MurottalTrack | null>(
     DEFAULT_JUZ_30_TRACKS[1] // Default An-Naba
   );
+  const [bellPlayback, setBellPlayback] = useState<BellPlaybackState>(() => getBellPlaybackState());
+
+  useEffect(() => {
+    return subscribeBellPlaybackState(setBellPlayback);
+  }, []);
 
   const murottalAudioRef = useRef<HTMLAudioElement | null>(null);
   const firedMurottalKeysRef = useRef<Set<string>>(new Set());
@@ -197,6 +209,12 @@ export default function App() {
   // Firebase Cloud Real-Time Sync State & Refs
   const [cloudUser, setCloudUser] = useState<User | null>(null);
   const [cloudStatus, setCloudStatus] = useState<'connecting' | 'synced' | 'syncing' | 'error'>('connecting');
+  const [cloudLoginError, setCloudLoginError] = useState<{
+    code: string;
+    domain: string;
+    message: string;
+  } | null>(null);
+  const [copiedDomain, setCopiedDomain] = useState(false);
   const cloudSchoolExistsRef = useRef<boolean | null>(null);
   const cloudHadSchedulesRef = useRef<boolean>(false);
   const knownCloudScheduleIdsRef = useRef<Set<string>>(new Set());
@@ -440,6 +458,11 @@ export default function App() {
 
         if (schoolData.audioSettings) {
           const currentLocal = audioSettingsRef.current;
+          const cloudPostBell = schoolData.audioSettings.postBellTracks || [];
+          const cloudPostIds = new Set(cloudPostBell.map((t) => t.id));
+          const localOnlyPostBell = (currentLocal.postBellTracks || []).filter(
+            (t) => !cloudPostIds.has(t.id) && (t.audioUrl.startsWith('idb-audio://') || t.audioUrl.length > 240000)
+          );
           const mergedSettings: AudioSettings = {
             ...currentLocal,
             ...schoolData.audioSettings,
@@ -447,6 +470,7 @@ export default function App() {
               schoolData.audioSettings.customPrefixAudioUrl || currentLocal.customPrefixAudioUrl,
             globalOutroChimeUrl:
               schoolData.audioSettings.globalOutroChimeUrl || currentLocal.globalOutroChimeUrl,
+            postBellTracks: [...cloudPostBell, ...localOnlyPostBell],
           };
           const serialized = JSON.stringify(mergedSettings);
           if (serialized !== JSON.stringify(currentLocal)) {
@@ -562,14 +586,39 @@ export default function App() {
   const handleCloudLogin = async () => {
     if (isSigningInRef.current) return;
     isSigningInRef.current = true;
+    setCloudLoginError(null);
+    setCopiedDomain(false);
     try {
       await signInWithPopup(auth, googleProvider);
+      setCloudLoginError(null);
     } catch (err: any) {
-      const code = err?.code || '';
+      const code = err?.code || 'unknown';
+      const currentDomain = typeof window !== 'undefined' ? window.location.hostname : '';
       if (code === 'auth/cancelled-popup-request' || code === 'auth/popup-closed-by-user') {
         console.warn('Google Sign-In popup ditutup atau dibatalkan oleh pengguna.');
+      } else if (code === 'auth/unauthorized-domain') {
+        console.error('Google Sign-In unauthorized domain:', currentDomain, err);
+        setCloudLoginError({
+          code,
+          domain: currentDomain,
+          message:
+            `Domain "${currentDomain}" belum didaftarkan di Firebase Authorized Domains. Tambahkan domain ini di Firebase Console → Authentication → Settings → Authorized domains agar Login Sync bisa digunakan di Vercel.`,
+        });
+      } else if (code === 'auth/popup-blocked') {
+        console.error('Google Sign-In popup blocked:', err);
+        setCloudLoginError({
+          code,
+          domain: currentDomain,
+          message:
+            'Pop-up login Google diblokir oleh browser Anda. Mohon izinkan Pop-up pada ikon di sebelah kanan kolom alamat browser, lalu klik Login Sync lagi.',
+        });
       } else {
         console.error('Google Sign-In error:', err);
+        setCloudLoginError({
+          code,
+          domain: currentDomain,
+          message: err?.message || 'Gagal melakukan Login Sync Google. Silakan coba lagi.',
+        });
       }
     } finally {
       isSigningInRef.current = false;
@@ -1073,7 +1122,12 @@ export default function App() {
         item.customOutroChimeUrl,
         item.speechLanguage || 'id',
         item.speechInputMode || 'auto_translate',
-        item.translatedSpeechText
+        item.translatedSpeechText,
+        {
+          label: `${item.time} - ${item.label}`,
+          scheduleId: item.id,
+          scheduleTime: item.time,
+        }
       );
     } catch (err) {
       console.error('Error firing automatic bell sequence:', err);
@@ -1159,7 +1213,10 @@ export default function App() {
     };
     setBellLogs((prev) => [newLog, ...prev.slice(0, 99)]);
 
-    await playBellSequence('westminster', testText, audioSettings);
+    await playBellSequence('westminster', testText, audioSettings, 1.0, undefined, 'tts', undefined, undefined, undefined, undefined, undefined, 'id', 'auto_translate', undefined, {
+      label: 'Tes Bell Seketika',
+      skipPostBellTracks: true,
+    });
   };
 
   // Test Row Schedule Item
@@ -1197,7 +1254,12 @@ export default function App() {
       item.customOutroChimeUrl,
       item.speechLanguage || 'id',
       item.speechInputMode || 'auto_translate',
-      item.translatedSpeechText
+      item.translatedSpeechText,
+      {
+        label: `${item.time} - ${item.label}`,
+        scheduleId: item.id,
+        scheduleTime: item.time,
+      }
     );
   };
 
@@ -1360,6 +1422,9 @@ export default function App() {
         onCloudLogin={handleCloudLogin}
         onCloudLogout={handleCloudLogout}
         onForcePushCloud={handleForcePushCloud}
+        bellPlayback={bellPlayback}
+        onTogglePauseBell={togglePauseBellPlayback}
+        onStopBell={stopAllBellAudio}
       />
 
       {/* Main Container */}
@@ -1385,6 +1450,9 @@ export default function App() {
           onTriggerScheduleBell={handleTestScheduleItem}
           disabledDays={disabledDays}
           onToggleDisabledDay={handleToggleDisabledDay}
+          bellPlayback={bellPlayback}
+          onTogglePauseBell={togglePauseBellPlayback}
+          onStopBell={stopAllBellAudio}
         />
 
         {/* Dynamic Tab Views */}
@@ -1409,6 +1477,9 @@ export default function App() {
             onOpenAddExtraPeriods={() => setIsAddExtraPeriodsOpen(true)}
             onResetToDefault={handleResetToDefault}
             onImportExport={() => setIsImportExportOpen(true)}
+            bellPlayback={bellPlayback}
+            onTogglePauseBell={togglePauseBellPlayback}
+            onStopBell={stopAllBellAudio}
           />
         )}
 
@@ -1433,6 +1504,7 @@ export default function App() {
           <ChimeManager
             settings={audioSettings}
             onUpdateSettings={setAudioSettings}
+            schedules={schedules}
           />
         )}
 
@@ -1555,6 +1627,63 @@ export default function App() {
         schedules={schedules}
         onImportSchedules={(newSchedules) => setSchedules(newSchedules)}
       />
+
+      {/* Non-intrusive Cloud Login Diagnostic Toast (only visible when login fails, e.g. unauthorized Vercel domain) */}
+      {cloudLoginError && (
+        <div className="fixed bottom-4 right-4 z-50 max-w-md w-[calc(100vw-2rem)] bg-white border border-rose-300 shadow-2xl rounded-2xl p-4 space-y-2.5 animate-fadeIn">
+          <div className="flex items-start justify-between gap-2">
+            <div className="flex items-center gap-2 text-rose-700">
+              <AlertCircle className="w-5 h-5 shrink-0 text-rose-600" />
+              <h4 className="text-xs sm:text-sm font-extrabold">
+                Login Cloud Sync Belum Bisa di Domain Ini
+              </h4>
+            </div>
+            <button
+              type="button"
+              onClick={() => setCloudLoginError(null)}
+              className="text-slate-400 hover:text-slate-700 p-1 rounded-lg hover:bg-slate-100 cursor-pointer"
+              title="Tutup"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          <p className="text-xs text-slate-700 leading-relaxed">
+            {cloudLoginError.message}
+          </p>
+
+          {cloudLoginError.code === 'auth/unauthorized-domain' && cloudLoginError.domain && (
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-2.5 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <code className="text-xs font-mono font-bold text-blue-700 truncate">
+                  {cloudLoginError.domain}
+                </code>
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard?.writeText(cloudLoginError.domain);
+                    setCopiedDomain(true);
+                    setTimeout(() => setCopiedDomain(false), 2000);
+                  }}
+                  className="shrink-0 bg-blue-600 hover:bg-blue-700 text-white text-[11px] font-bold px-2.5 py-1 rounded-lg flex items-center gap-1 cursor-pointer"
+                >
+                  {copiedDomain ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                  <span>{copiedDomain ? 'Tersalin' : 'Salin Domain'}</span>
+                </button>
+              </div>
+              <a
+                href={`https://console.firebase.google.com/project/${firebaseConfig.projectId}/authentication/settings`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[11px] font-bold text-blue-600 hover:text-blue-800 inline-flex items-center gap-1 underline"
+              >
+                <span>Buka Pengaturan Authorized Domains Firebase</span>
+                <ExternalLink className="w-3 h-3" />
+              </a>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

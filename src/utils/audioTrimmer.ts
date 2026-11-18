@@ -1,7 +1,8 @@
 import { getAudioContext } from './audioSynth';
+import { getAudioBlobFromIDB, IDB_AUDIO_PREFIX } from './audioBlobStore';
 
 /**
- * Fetch and decode any audio source (Base64 data URL, Blob URL, Cloudinary URL, or Drive proxy link)
+ * Fetch and decode any audio source (Base64 data URL, Blob URL, idb-audio://, Cloudinary URL, or Drive proxy link)
  * into a Web Audio API AudioBuffer for sample-accurate trimming.
  */
 export async function decodeAudioBufferFromUrl(audioUrl: string): Promise<AudioBuffer> {
@@ -11,7 +12,13 @@ export async function decodeAudioBufferFromUrl(audioUrl: string): Promise<AudioB
 
   let arrayBuffer: ArrayBuffer;
 
-  if (audioUrl.startsWith('data:') || audioUrl.startsWith('blob:')) {
+  if (audioUrl.startsWith(IDB_AUDIO_PREFIX)) {
+    const blob = await getAudioBlobFromIDB(audioUrl);
+    if (!blob) {
+      throw new Error('File rekaman lokal tidak ditemukan.');
+    }
+    arrayBuffer = await blob.arrayBuffer();
+  } else if (audioUrl.startsWith('data:') || audioUrl.startsWith('blob:')) {
     const res = await fetch(audioUrl);
     if (!res.ok) {
       throw new Error('Gagal membaca data audio lokal.');

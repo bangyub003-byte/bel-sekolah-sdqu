@@ -85,6 +85,19 @@ export interface BellLog {
   details?: string;
 }
 
+export interface PostBellTrack {
+  id: string;
+  name: string;
+  audioUrl: string; // Base64, idb-audio:// ref, or cloud link
+  audioName?: string;
+  scheduleId?: string; // Target ScheduleItem.id or 'all'
+  scheduleTime?: string; // Target HH:MM (e.g. '13:45') for cross-day matching
+  volume: number; // 0 to 1
+  enabled: boolean;
+  durationSec?: number;
+  createdAt: number;
+}
+
 export interface AudioSettings {
   voiceURI: string;
   lang: string;
@@ -112,6 +125,7 @@ export interface AudioSettings {
   globalOutroChimeUrl?: string;
   globalOutroChimeName?: string;
   outroChimeDelayMs?: number; // Delay between voice ending and outro chime
+  postBellTracks?: PostBellTrack[]; // Scheduled post-bell recordings/music played automatically after bell
 }
 
 export interface TimeSyncInfo {

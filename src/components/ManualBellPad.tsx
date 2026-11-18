@@ -11,9 +11,18 @@ import {
   Globe,
   Sparkles,
   Loader2,
+  Pause,
+  Square,
 } from 'lucide-react';
 import { ChimeType, AudioSettings, SpeechLanguage, SpeechInputMode } from '../types';
-import { playBellSequence, translateSpeechWithAI } from '../utils/audioSynth';
+import {
+  playBellSequence,
+  translateSpeechWithAI,
+  BellPlaybackState,
+  subscribeBellPlaybackState,
+  togglePauseBellPlayback,
+  stopAllBellAudio,
+} from '../utils/audioSynth';
 
 interface ManualBellPadProps {
   audioSettings: AudioSettings;
@@ -32,6 +41,17 @@ export const ManualBellPad: React.FC<ManualBellPadProps> = ({
   const [customOutroChime, setCustomOutroChime] = useState<ChimeType | 'none' | 'same_as_intro'>('same_as_intro');
   const [isPlaying, setIsPlaying] = useState(false);
   const [activePresetId, setActivePresetId] = useState<string | null>(null);
+  const [bellPlayback, setBellPlayback] = useState<BellPlaybackState | null>(null);
+
+  React.useEffect(() => {
+    return subscribeBellPlaybackState((s) => {
+      setBellPlayback(s);
+      if (!s.isPlaying) {
+        setIsPlaying(false);
+        setActivePresetId(null);
+      }
+    });
+  }, []);
 
   const manualPresets = [
     {
@@ -114,7 +134,12 @@ export const ManualBellPad: React.FC<ManualBellPadProps> = ({
         undefined,
         undefined,
         true,
-        preset.outroChime || 'same_as_intro'
+        preset.outroChime || 'same_as_intro',
+        undefined,
+        'id',
+        'auto_translate',
+        undefined,
+        { label: preset.title, skipPostBellTracks: true }
       );
       onLogManualBell(`Bel Manual: ${preset.title}`, fullText);
     } catch (err) {
@@ -175,7 +200,8 @@ export const ManualBellPad: React.FC<ManualBellPadProps> = ({
         undefined,
         customLanguage,
         customInputMode,
-        resolvedTargetText
+        resolvedTargetText,
+        { label: `Siaran Manual (${customLanguage.toUpperCase()})`, skipPostBellTracks: true }
       );
       onLogManualBell(`Bel Manual Custom (${customLanguage.toUpperCase()})`, resolvedTargetText || fullText);
       setCustomText('');
@@ -201,10 +227,35 @@ export const ManualBellPad: React.FC<ManualBellPadProps> = ({
           </p>
         </div>
 
-        {isPlaying && (
-          <div className="bg-amber-50 text-amber-700 border border-amber-200 px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 animate-pulse">
-            <Volume2 className="w-4 h-4 text-amber-600" />
-            <span>Sedang Membunyikan Bel Manual...</span>
+        {(isPlaying || bellPlayback?.isPlaying) && (
+          <div className="bg-amber-50 text-amber-800 border border-amber-200 px-3 py-1.5 rounded-xl text-xs font-bold flex flex-wrap items-center gap-2">
+            <Volume2 className="w-4 h-4 text-amber-600 animate-pulse" />
+            <span>{bellPlayback?.isPaused ? 'Bel Dijeda (Pause)' : 'Sedang Membunyikan Bel...'}</span>
+            <button
+              type="button"
+              onClick={togglePauseBellPlayback}
+              className="bg-amber-500 hover:bg-amber-600 text-white px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1 cursor-pointer"
+            >
+              {bellPlayback?.isPaused ? (
+                <>
+                  <Play className="w-3 h-3 fill-current" />
+                  <span>Lanjut</span>
+                </>
+              ) : (
+                <>
+                  <Pause className="w-3 h-3 fill-current" />
+                  <span>Pause</span>
+                </>
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={stopAllBellAudio}
+              className="bg-rose-600 hover:bg-rose-700 text-white px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1 cursor-pointer"
+            >
+              <Square className="w-3 h-3 fill-current" />
+              <span>Berhenti</span>
+            </button>
           </div>
         )}
       </div>

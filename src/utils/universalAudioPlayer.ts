@@ -10,10 +10,22 @@
  * 4. Handles browser AudioContext unlocking / user interaction gesture policy cleanly.
  */
 
+import { getAudioBlobFromIDB, IDB_AUDIO_PREFIX } from './audioBlobStore';
+
 let sharedAudioCtx: AudioContext | null = null;
 let currentSourceNode: AudioBufferSourceNode | null = null;
 let currentGainNode: GainNode | null = null;
 let currentHtmlAudio: HTMLAudioElement | null = null;
+let currentObjectUrl: string | null = null;
+
+// Web Audio pause/resume state
+let activeAudioBuffer: AudioBuffer | null = null;
+let activeAudioVolume = 1.0;
+let activeBufferOffset = 0;
+let activeBufferStartedAt = 0;
+let activeBufferOnEnded: (() => void) | null = null;
+let activeAbortCallback: (() => void) | null = null;
+let isPausedFlag = false;
 
 export function getSharedAudioContext(): AudioContext {
   if (!sharedAudioCtx) {
@@ -133,6 +145,14 @@ export async function dataUrlToArrayBuffer(dataUrl: string): Promise<ArrayBuffer
     throw new Error('Perlu fallback ke pemutar audio browser.');
   }
 
+  if (dataUrl.startsWith(IDB_AUDIO_PREFIX)) {
+    const blob = await getAudioBlobFromIDB(dataUrl);
+    if (!blob) {
+      throw new AudioSourceValidationError('File rekaman lokal tidak ditemukan di perangkat ini.');
+    }
+    return await blob.arrayBuffer();
+  }
+
   if (dataUrl.startsWith('blob:')) {
     const res = await fetch(dataUrl);
     if (!res.ok) {
@@ -157,10 +177,128 @@ export async function dataUrlToArrayBuffer(dataUrl: string): Promise<ArrayBuffer
   return await res.arrayBuffer();
 }
 
+function clearActiveAudioRefs() {
+  activeAudioBuffer = null;
+  activeBufferOffset = 0;
+  activeBufferStartedAt = 0;
+  activeBufferOnEnded = null;
+  activeAbortCallback = null;
+  isPausedFlag = false;
+  if (currentObjectUrl) {
+    try {
+      URL.revokeObjectURL(currentObjectUrl);
+    } catch {}
+    currentObjectUrl = null;
+  }
+}
+
+export function isCustomAudioPaused(): boolean {
+  return isPausedFlag;
+}
+
+export function isCustomAudioPlaying(): boolean {
+  return Boolean(currentSourceNode || currentHtmlAudio || (isPausedFlag && activeAudioBuffer));
+}
+
+export function pauseCustomAudio(): boolean {
+  if (isPausedFlag) return true;
+
+  if (currentHtmlAudio && !currentHtmlAudio.paused) {
+    try {
+      currentHtmlAudio.pause();
+      isPausedFlag = true;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  if (currentSourceNode && activeAudioBuffer && sharedAudioCtx) {
+    const elapsed = Math.max(0, sharedAudioCtx.currentTime - activeBufferStartedAt);
+    activeBufferOffset = Math.min(activeAudioBuffer.duration, activeBufferOffset + elapsed);
+    const node = currentSourceNode;
+    const gain = currentGainNode;
+    currentSourceNode = null;
+    currentGainNode = null;
+    try {
+      node.onended = null;
+      node.stop();
+      node.disconnect();
+    } catch {}
+    if (gain) {
+      try {
+        gain.disconnect();
+      } catch {}
+    }
+    isPausedFlag = true;
+    return true;
+  }
+
+  return false;
+}
+
+export function resumeCustomAudio(): boolean {
+  if (!isPausedFlag) return false;
+
+  if (currentHtmlAudio) {
+    isPausedFlag = false;
+    currentHtmlAudio.play().catch(() => {});
+    return true;
+  }
+
+  if (activeAudioBuffer) {
+    try {
+      const ctx = getSharedAudioContext();
+      if (ctx.state === 'suspended') {
+        ctx.resume().catch(() => {});
+      }
+
+      const remaining = activeAudioBuffer.duration - activeBufferOffset;
+      if (remaining <= 0.02) {
+        const endCb = activeBufferOnEnded;
+        clearActiveAudioRefs();
+        endCb?.();
+        return false;
+      }
+
+      const source = ctx.createBufferSource();
+      source.buffer = activeAudioBuffer;
+      const gainNode = ctx.createGain();
+      gainNode.gain.setValueAtTime(activeAudioVolume, ctx.currentTime);
+
+      source.connect(gainNode);
+      gainNode.connect(ctx.destination);
+
+      currentSourceNode = source;
+      currentGainNode = gainNode;
+      activeBufferStartedAt = ctx.currentTime;
+      isPausedFlag = false;
+
+      const onEndCb = activeBufferOnEnded;
+      source.onended = () => {
+        if (currentSourceNode !== source) return;
+        currentSourceNode = null;
+        currentGainNode = null;
+        clearActiveAudioRefs();
+        onEndCb?.();
+      };
+
+      source.start(0, activeBufferOffset);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  return false;
+}
+
 /**
  * Stop any active audio playback (both HTMLAudio & Web Audio API)
  */
 export function stopAllCustomAudio(): void {
+  const abortCb = activeAbortCallback;
+
   if (currentHtmlAudio) {
     try {
       currentHtmlAudio.onerror = null;
@@ -174,6 +312,7 @@ export function stopAllCustomAudio(): void {
 
   if (currentSourceNode) {
     try {
+      currentSourceNode.onended = null;
       currentSourceNode.stop();
       currentSourceNode.disconnect();
     } catch {}
@@ -186,11 +325,18 @@ export function stopAllCustomAudio(): void {
     } catch {}
     currentGainNode = null;
   }
+
+  clearActiveAudioRefs();
+  if (abortCb) {
+    try {
+      abortCb();
+    } catch {}
+  }
 }
 
 /**
  * Play audio file using Web Audio API with safe HTML5 Audio fallback.
- * Supports raw AAC (.aac/.acc), M4A, 3GP, MP3, WAV, OGG, raw PCM (L16), and cloud URLs.
+ * Supports raw AAC (.aac/.acc), M4A, 3GP, MP3, WAV, OGG, raw PCM (L16), idb-audio://, and cloud URLs.
  */
 export async function playUniversalAudio(
   dataUrl: string,
@@ -240,6 +386,11 @@ export async function playUniversalAudio(
 
     currentSourceNode = source;
     currentGainNode = gainNode;
+    activeAudioBuffer = decodedBuffer;
+    activeAudioVolume = safeVolume;
+    activeBufferOffset = 0;
+    activeBufferStartedAt = ctx.currentTime;
+    isPausedFlag = false;
 
     let isFinished = false;
     const finishHandler = () => {
@@ -251,16 +402,24 @@ export async function playUniversalAudio(
       if (currentGainNode === gainNode) {
         currentGainNode = null;
       }
+      clearActiveAudioRefs();
       onEnded?.();
     };
 
-    source.onended = finishHandler;
+    activeBufferOnEnded = finishHandler;
+    activeAbortCallback = finishHandler;
+
+    source.onended = () => {
+      if (currentSourceNode !== source) return;
+      finishHandler();
+    };
     source.start(0);
 
     return () => {
       if (!isFinished) {
         isFinished = true;
         try {
+          source.onended = null;
           source.stop();
           source.disconnect();
         } catch {}
@@ -269,10 +428,10 @@ export async function playUniversalAudio(
         } catch {}
         if (currentSourceNode === source) currentSourceNode = null;
         if (currentGainNode === gainNode) currentGainNode = null;
+        clearActiveAudioRefs();
       }
     };
   } catch (webAudioErr: any) {
-    // If validation already proved the URL is invalid/private HTML or 0-byte, do not feed it to HTML5 <audio>
     if (webAudioErr instanceof AudioSourceValidationError) {
       console.warn('Audio validation notice:', webAudioErr.message);
       onEnded?.();
@@ -281,7 +440,18 @@ export async function playUniversalAudio(
 
     console.warn('Web Audio API decoding fallback to HTML5 Audio element:', webAudioErr?.message || webAudioErr);
 
-    // Method 2: Safe Fallback to HTML5 Audio Element (useful for public MP3/WAV URLs without CORS)
+    // Method 2: Safe Fallback to HTML5 Audio Element (useful for public MP3/WAV URLs without CORS or large idb blobs)
+    let resolvedSrc = trimmedUrl;
+    if (trimmedUrl.startsWith(IDB_AUDIO_PREFIX)) {
+      const blob = await getAudioBlobFromIDB(trimmedUrl);
+      if (!blob) {
+        onEnded?.();
+        throw new Error('File rekaman lokal tidak ditemukan di perangkat ini.');
+      }
+      resolvedSrc = URL.createObjectURL(blob);
+      currentObjectUrl = resolvedSrc;
+    }
+
     return new Promise((resolve, reject) => {
       let settled = false;
 
@@ -290,11 +460,23 @@ export async function playUniversalAudio(
         audio.preload = 'auto';
         audio.volume = safeVolume;
         currentHtmlAudio = audio;
+        isPausedFlag = false;
 
         let stopped = false;
         const cleanup = () => {
           audio.onerror = null;
           audio.onended = null;
+        };
+
+        const finishHtml = () => {
+          if (stopped) return;
+          stopped = true;
+          cleanup();
+          if (currentHtmlAudio === audio) {
+            currentHtmlAudio = null;
+          }
+          clearActiveAudioRefs();
+          onEnded?.();
         };
 
         const stopFn = () => {
@@ -309,7 +491,10 @@ export async function playUniversalAudio(
           if (currentHtmlAudio === audio) {
             currentHtmlAudio = null;
           }
+          clearActiveAudioRefs();
         };
+
+        activeAbortCallback = finishHtml;
 
         const failPlayback = (reason: string) => {
           if (settled) return;
@@ -318,17 +503,14 @@ export async function playUniversalAudio(
           if (currentHtmlAudio === audio) {
             currentHtmlAudio = null;
           }
+          clearActiveAudioRefs();
           console.warn('HTML5 Audio playback unavailable:', reason);
           onEnded?.();
           reject(new Error(reason));
         };
 
         audio.onended = () => {
-          cleanup();
-          if (currentHtmlAudio === audio) {
-            currentHtmlAudio = null;
-          }
-          onEnded?.();
+          finishHtml();
         };
 
         audio.onerror = () => {
@@ -339,7 +521,7 @@ export async function playUniversalAudio(
           failPlayback(reason);
         };
 
-        audio.src = trimmedUrl;
+        audio.src = resolvedSrc;
 
         const playPromise = audio.play();
         if (playPromise !== undefined) {
@@ -360,6 +542,7 @@ export async function playUniversalAudio(
         if (!settled) {
           settled = true;
           console.warn('All audio playback methods failed:', err?.message || err);
+          clearActiveAudioRefs();
           onEnded?.();
           reject(err instanceof Error ? err : new Error('Gagal memutar audio'));
         }

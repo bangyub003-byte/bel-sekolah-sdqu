@@ -24,9 +24,19 @@ import {
   Smartphone,
   Globe,
   Scissors,
+  Square,
+  Clock,
 } from 'lucide-react';
-import { AudioSettings, CustomChime, BuiltinChimeType, ChimeType } from '../types';
-import { playChimeTone, playCustomAudio, playBellSequence } from '../utils/audioSynth';
+import { AudioSettings, CustomChime, BuiltinChimeType, ChimeType, ScheduleItem, PostBellTrack } from '../types';
+import {
+  playChimeTone,
+  playBellSequence,
+  playPostBellTrack,
+  BellPlaybackState,
+  subscribeBellPlaybackState,
+  togglePauseBellPlayback,
+  stopAllBellAudio,
+} from '../utils/audioSynth';
 import { playUniversalAudio, stopAllCustomAudio } from '../utils/universalAudioPlayer';
 import {
   AUDIO_FILE_ACCEPT,
@@ -34,18 +44,21 @@ import {
   getAudioFormatLabel,
 } from '../utils/audioFileUtils';
 import { normalizeAudioCloudUrl, isCloudAudioUrl, uploadAudioToCloudinary } from '../utils/cloudAudioUtils';
+import { saveAudioBlobToIDB, deleteAudioBlobFromIDB, IDB_AUDIO_PREFIX } from '../utils/audioBlobStore';
 import { AudioTrimmerModal } from './AudioTrimmerModal';
 
 interface ChimeManagerProps {
   settings: AudioSettings;
   onUpdateSettings: (newSettings: AudioSettings) => void;
   onLogBell?: (label: string, text: string) => void;
+  schedules?: ScheduleItem[];
 }
 
 export const ChimeManager: React.FC<ChimeManagerProps> = ({
   settings,
   onUpdateSettings,
   onLogBell,
+  schedules = [],
 }) => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<'upload' | 'record' | 'url'>('upload');
@@ -80,17 +93,44 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
   const [enableOutroForTest, setEnableOutroForTest] = useState<boolean>(false);
 
   const customChimes = settings.customChimes || [];
+  const postBellTracks = settings.postBellTracks || [];
   const defaultChimeId = settings.defaultChimeId;
   const useCustomDefaultChime = settings.useCustomDefaultChime ?? false;
 
-  // Audio Trimmer modal state (for both saved custom chimes and draft upload/record/url audio)
+  const [bellPlayback, setBellPlayback] = useState<BellPlaybackState | null>(null);
+
+  useEffect(() => {
+    return subscribeBellPlaybackState((s) => {
+      setBellPlayback(s);
+      if (!s.isPlaying) {
+        setIsTestingSequence(false);
+      }
+    });
+  }, []);
+
+  // Audio Trimmer modal state (for saved custom chimes, post-bell tracks, and drafts)
   const [trimmerTarget, setTrimmerTarget] = useState<{
-    mode: 'draft' | 'existing';
+    mode: 'draft' | 'existing' | 'post_bell_draft' | 'post_bell_existing';
     chime?: CustomChime;
+    postBellTrack?: PostBellTrack;
     audioUrl: string;
     title: string;
     fileName: string;
   } | null>(null);
+
+  // Modal & Form State for Section 4: Post-Bell Scheduled Tracks
+  const [isPostBellModalOpen, setIsPostBellModalOpen] = useState(false);
+  const [postBellInputTab, setPostBellInputTab] = useState<'upload' | 'url'>('upload');
+  const [postBellName, setPostBellName] = useState('');
+  const [postBellTargetKey, setPostBellTargetKey] = useState<string>('custom_time'); // 'all' | 'custom_time' | scheduleId
+  const [postBellCustomTime, setPostBellCustomTime] = useState('13:45');
+  const [postBellAudioUrl, setPostBellAudioUrl] = useState<string | null>(null);
+  const [postBellAudioName, setPostBellAudioName] = useState('');
+  const [postBellDuration, setPostBellDuration] = useState<number | undefined>(undefined);
+  const [postBellCloudUrlInput, setPostBellCloudUrlInput] = useState('');
+  const [postBellVolume, setPostBellVolume] = useState(1.0);
+  const [isUploadingPostBell, setIsUploadingPostBell] = useState(false);
+  const [postBellUploadError, setPostBellUploadError] = useState<string | null>(null);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -194,8 +234,9 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
   };
 
   const openTrimmer = (target: {
-    mode: 'draft' | 'existing';
+    mode: 'draft' | 'existing' | 'post_bell_draft' | 'post_bell_existing';
     chime?: CustomChime;
+    postBellTrack?: PostBellTrack;
     audioUrl: string;
     title: string;
     fileName: string;
@@ -207,6 +248,156 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
     stopAllCustomAudio();
     setPlayingId(null);
     setTrimmerTarget(target);
+  };
+
+  // Upload large/long audio for Post-Bell Scheduled Playback (uses Cloudinary or IndexedDB automatically)
+  const handlePostBellFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    setPostBellUploadError(null);
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsUploadingPostBell(true);
+    try {
+      const cleanDefaultName = file.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ');
+      if (!postBellName) {
+        setPostBellName(cleanDefaultName.charAt(0).toUpperCase() + cleanDefaultName.slice(1));
+      }
+
+      if (settings.cloudinaryCloudName) {
+        try {
+          const uploaded = await uploadAudioToCloudinary(
+            file,
+            file.name,
+            settings.cloudinaryCloudName,
+            settings.cloudinaryUploadPreset
+          );
+          setPostBellAudioName(uploaded.fileName);
+          setPostBellAudioUrl(uploaded.url);
+          return;
+        } catch (cloudErr) {
+          console.warn('Cloudinary upload fallback to local IndexedDB for post-bell audio:', cloudErr);
+        }
+      }
+
+      // Extract duration cleanly using HTMLAudio metadata
+      try {
+        const objUrl = URL.createObjectURL(file);
+        const probeAudio = new Audio(objUrl);
+        await new Promise<void>((resolve) => {
+          probeAudio.onloadedmetadata = () => {
+            if (isFinite(probeAudio.duration) && probeAudio.duration > 0) {
+              setPostBellDuration(Math.round(probeAudio.duration));
+            }
+            URL.revokeObjectURL(objUrl);
+            resolve();
+          };
+          probeAudio.onerror = () => {
+            URL.revokeObjectURL(objUrl);
+            resolve();
+          };
+          setTimeout(() => {
+            URL.revokeObjectURL(objUrl);
+            resolve();
+          }, 2500);
+        });
+      } catch {}
+
+      // Files <= 900KB can stay inline dataUrl, larger files (e.g. 8-minute recordings) go straight to IndexedDB
+      if (file.size <= 900 * 1024) {
+        const processed = await processAudioFile(file, 2 * 1024 * 1024);
+        setPostBellAudioName(processed.fileName);
+        setPostBellAudioUrl(processed.dataUrl);
+        if (processed.duration) setPostBellDuration(processed.duration);
+      } else {
+        const idbKey = `postbell_${Date.now()}`;
+        const idbRef = await saveAudioBlobToIDB(idbKey, file);
+        setPostBellAudioName(file.name);
+        setPostBellAudioUrl(idbRef);
+      }
+    } catch (err: any) {
+      setPostBellUploadError(err?.message || 'Gagal memuat file rekaman tambahan.');
+    } finally {
+      setIsUploadingPostBell(false);
+      e.target.value = '';
+    }
+  };
+
+  const handleSavePostBellTrack = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!postBellAudioUrl || !postBellName.trim()) {
+      alert('Mohon masukkan judul rekaman dan pilih file/link audio.');
+      return;
+    }
+
+    let resolvedScheduleId: string | undefined = undefined;
+    let resolvedScheduleTime: string | undefined = undefined;
+
+    if (postBellTargetKey === 'all') {
+      resolvedScheduleId = 'all';
+    } else if (postBellTargetKey === 'custom_time') {
+      resolvedScheduleTime = postBellCustomTime || '13:45';
+    } else {
+      const matched = schedules.find((s) => s.id === postBellTargetKey);
+      resolvedScheduleId = postBellTargetKey;
+      resolvedScheduleTime = matched?.time;
+    }
+
+    const newTrack: PostBellTrack = {
+      id: `postbell_${Date.now()}`,
+      name: postBellName.trim(),
+      audioUrl: postBellAudioUrl,
+      audioName: postBellAudioName || 'Rekaman Tambahan',
+      scheduleId: resolvedScheduleId,
+      scheduleTime: resolvedScheduleTime,
+      volume: postBellVolume,
+      enabled: true,
+      durationSec: postBellDuration,
+      createdAt: Date.now(),
+    };
+
+    onUpdateSettings({
+      ...settings,
+      postBellTracks: [newTrack, ...postBellTracks],
+    });
+
+    setIsPostBellModalOpen(false);
+    setPostBellName('');
+    setPostBellAudioUrl(null);
+    setPostBellAudioName('');
+    setPostBellDuration(undefined);
+    setPostBellCloudUrlInput('');
+    setPostBellVolume(1.0);
+  };
+
+  const handleTogglePostBellTrack = (id: string) => {
+    onUpdateSettings({
+      ...settings,
+      postBellTracks: postBellTracks.map((t) =>
+        t.id === id ? { ...t, enabled: !t.enabled } : t
+      ),
+    });
+  };
+
+  const handleDeletePostBellTrack = (track: PostBellTrack) => {
+    if (!confirm(`Hapus rekaman tambahan "${track.name}"?`)) return;
+    if (bellPlayback?.postBellTrackId === track.id) {
+      stopAllBellAudio();
+    }
+    deleteAudioBlobFromIDB(track.audioUrl);
+    onUpdateSettings({
+      ...settings,
+      postBellTracks: postBellTracks.filter((t) => t.id !== track.id),
+    });
+  };
+
+  const formatDurationLabel = (secs?: number) => {
+    if (!secs || secs <= 0) return null;
+    if (secs >= 60) {
+      const m = Math.floor(secs / 60);
+      const s = secs % 60;
+      return `${m}m ${String(s).padStart(2, '0')}d`;
+    }
+    return `${secs}d`;
   };
 
   // Handle File Upload (Supports AAC, M4A, 3GP, AMR, MP3, WAV, OGG, etc.)
@@ -990,18 +1181,269 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
                 placeholder="memasuki jam pelajaran ke-1."
                 className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-400"
               />
-              <button
-                type="button"
-                disabled={isTestingSequence}
-                onClick={handleTestFullSequence}
-                className="bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-black px-4 py-2 rounded-xl text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-500/20 active:scale-95 transition-all cursor-pointer disabled:opacity-50 shrink-0"
-              >
-                <Play className="w-3.5 h-3.5 fill-current" />
-                <span>{isTestingSequence ? 'Memutar...' : 'Putar Urutan'}</span>
-              </button>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  disabled={isTestingSequence}
+                  onClick={handleTestFullSequence}
+                  className="bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-black px-4 py-2 rounded-xl text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-500/20 active:scale-95 transition-all cursor-pointer disabled:opacity-50 shrink-0"
+                >
+                  <Play className="w-3.5 h-3.5 fill-current" />
+                  <span>{isTestingSequence ? 'Memutar...' : 'Putar Urutan'}</span>
+                </button>
+                {(isTestingSequence || bellPlayback?.isPlaying) && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={togglePauseBellPlayback}
+                      className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black px-3 py-2 rounded-xl text-xs flex items-center gap-1 cursor-pointer"
+                    >
+                      {bellPlayback?.isPaused ? (
+                        <>
+                          <Play className="w-3.5 h-3.5 fill-current" />
+                          <span>Lanjut</span>
+                        </>
+                      ) : (
+                        <>
+                          <Pause className="w-3.5 h-3.5 fill-current" />
+                          <span>Pause</span>
+                        </>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={stopAllBellAudio}
+                      className="bg-rose-600 hover:bg-rose-500 text-white font-black px-3 py-2 rounded-xl text-xs flex items-center gap-1 cursor-pointer"
+                    >
+                      <Square className="w-3 h-3 fill-current" />
+                      <span>Berhenti</span>
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
           </div>
         </div>
+      </div>
+
+      {/* SECTION 4: Rekaman / Audio Tambahan Otomatis Setelah Bel (Sesuai Jadwal) */}
+      <div className="bg-gradient-to-r from-slate-900 via-slate-950 to-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-7 space-y-5 shadow-xl">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-800">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center border border-amber-500/30">
+                <Radio className="w-4 h-4" />
+              </div>
+              <h3 className="text-base sm:text-lg font-extrabold text-white">
+                Rekaman Tambahan Otomatis Setelah Bel ({postBellTracks.length})
+              </h3>
+            </div>
+            <p className="text-xs text-slate-400 max-w-2xl">
+              Putar rekaman panjang secara otomatis tepat setelah pengumuman bel berbunyi sesuai jadwal yang dipilih (misalnya rekaman 8 menit setelah bel pulang jam 13:45), lengkap dengan kontrol Pause &amp; Berhenti.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              setPostBellUploadError(null);
+              setIsPostBellModalOpen(true);
+            }}
+            className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-black px-4 py-2.5 rounded-xl text-xs flex items-center gap-1.5 shadow-lg shadow-amber-500/20 cursor-pointer transition-all shrink-0"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Tambah Rekaman Setelah Bel</span>
+          </button>
+        </div>
+
+        {postBellTracks.length === 0 ? (
+          <div className="bg-slate-950/60 border border-dashed border-slate-800 rounded-2xl p-6 text-center space-y-2">
+            <p className="text-xs font-bold text-slate-300">
+              Belum ada rekaman tambahan setelah bel
+            </p>
+            <p className="text-[11px] text-slate-500 max-w-md mx-auto">
+              Cocok untuk memutar nasehat pulang, lagu, atau rekaman berdurasi panjang (misal 8 menit) setelah jadwal bel tertentu seperti 13:45. Bisa di-Pause atau dihentikan kapan saja.
+            </p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {postBellTracks.map((track) => {
+              const matchedSchedule = track.scheduleId && track.scheduleId !== 'all'
+                ? schedules.find((s) => s.id === track.scheduleId)
+                : undefined;
+              const isTrackActive =
+                bellPlayback?.isPlaying && bellPlayback.postBellTrackId === track.id;
+              const durLabel = formatDurationLabel(track.durationSec);
+
+              return (
+                <div
+                  key={track.id}
+                  className={`p-4 rounded-2xl border space-y-3 transition-all ${
+                    isTrackActive
+                      ? 'bg-amber-950/30 border-amber-400 ring-1 ring-amber-400/40'
+                      : track.enabled
+                      ? 'bg-slate-900/90 border-slate-800 hover:border-slate-700'
+                      : 'bg-slate-950/60 border-slate-800/60 opacity-65'
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="space-y-1 min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h4 className="text-sm font-black text-white truncate">
+                          {track.name}
+                        </h4>
+                        <span
+                          className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                            track.enabled
+                              ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                              : 'bg-slate-800 text-slate-400'
+                          }`}
+                        >
+                          {track.enabled ? 'Otomatis Aktif' : 'Nonaktif'}
+                        </span>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-slate-400 font-mono">
+                        <span className="bg-amber-500/15 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded font-sans font-bold flex items-center gap-1">
+                          <Clock className="w-3 h-3" />
+                          {track.scheduleId === 'all'
+                            ? 'Setelah Semua Jadwal Bel'
+                            : matchedSchedule
+                            ? `${matchedSchedule.time} • ${matchedSchedule.label}`
+                            : track.scheduleTime
+                            ? `Setelah Bel ${track.scheduleTime} WIB`
+                            : 'Jadwal Kustom'}
+                        </span>
+                        {durLabel && (
+                          <span className="bg-slate-800 px-1.5 py-0.5 rounded text-slate-300">
+                            ~{durLabel}
+                          </span>
+                        )}
+                        {track.audioUrl.startsWith(IDB_AUDIO_PREFIX) ? (
+                          <span className="bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 px-1.5 py-0.5 rounded font-sans font-bold">
+                            Lokal Besar (IDB)
+                          </span>
+                        ) : isCloudAudioUrl(track.audioUrl) ? (
+                          <span className="bg-blue-500/20 text-blue-300 border border-blue-500/30 px-1.5 py-0.5 rounded font-sans font-bold">
+                            Cloud Online
+                          </span>
+                        ) : null}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          openTrimmer({
+                            mode: 'post_bell_existing',
+                            postBellTrack: track,
+                            audioUrl: track.audioUrl,
+                            title: track.name,
+                            fileName: track.audioName || `${track.name}.wav`,
+                          })
+                        }
+                        className="text-slate-400 hover:text-emerald-300 p-1.5 rounded-lg hover:bg-emerald-950/40 transition-colors cursor-pointer"
+                        title="Potong / Cut Audio"
+                      >
+                        <Scissors className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeletePostBellTrack(track)}
+                        className="text-slate-500 hover:text-rose-400 p-1.5 rounded-lg hover:bg-rose-950/40 transition-colors cursor-pointer"
+                        title="Hapus Rekaman"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Per-track volume */}
+                  <div className="flex items-center gap-2 text-[11px] text-slate-400">
+                    <Volume2 className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                    <input
+                      type="range"
+                      min="0"
+                      max="1"
+                      step="0.05"
+                      value={track.volume ?? 1.0}
+                      onChange={(e) => {
+                        const val = parseFloat(e.target.value);
+                        onUpdateSettings({
+                          ...settings,
+                          postBellTracks: postBellTracks.map((t) =>
+                            t.id === track.id ? { ...t, volume: val } : t
+                          ),
+                        });
+                      }}
+                      className="flex-1 h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-amber-400"
+                    />
+                    <span className="font-mono w-9 text-right text-amber-300">
+                      {Math.round((track.volume ?? 1.0) * 100)}%
+                    </span>
+                  </div>
+
+                  {/* Play / Pause / Stop / Enable Toggle */}
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-800/80">
+                    <div className="flex items-center gap-1.5">
+                      {isTrackActive ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={togglePauseBellPlayback}
+                            className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-black px-3 py-1.5 rounded-xl text-xs flex items-center gap-1 cursor-pointer"
+                          >
+                            {bellPlayback?.isPaused ? (
+                              <>
+                                <Play className="w-3.5 h-3.5 fill-current" />
+                                <span>Lanjut</span>
+                              </>
+                            ) : (
+                              <>
+                                <Pause className="w-3.5 h-3.5 fill-current" />
+                                <span>Pause</span>
+                              </>
+                            )}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={stopAllBellAudio}
+                            className="bg-rose-600 hover:bg-rose-500 text-white font-black px-3 py-1.5 rounded-xl text-xs flex items-center gap-1 cursor-pointer"
+                          >
+                            <Square className="w-3 h-3 fill-current" />
+                            <span>Berhenti</span>
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => playPostBellTrack(track, 1.0)}
+                          className="bg-amber-500/20 hover:bg-amber-500 text-amber-300 hover:text-slate-950 border border-amber-500/30 font-bold px-3 py-1.5 rounded-xl text-xs flex items-center gap-1.5 cursor-pointer transition-all"
+                        >
+                          <Play className="w-3.5 h-3.5 fill-current" />
+                          <span>Putar Tes</span>
+                        </button>
+                      )}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => handleTogglePostBellTrack(track.id)}
+                      className={`text-[11px] font-bold px-3 py-1.5 rounded-xl border transition-all cursor-pointer ${
+                        track.enabled
+                          ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30 hover:bg-emerald-500/25'
+                          : 'bg-slate-800 text-slate-400 border-slate-700 hover:text-white'
+                      }`}
+                    >
+                      {track.enabled ? 'Aktif' : 'Nonaktifkan'}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* MODAL: Upload or Record Custom Bell Chime */}
@@ -1385,6 +1827,237 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
         </div>
       )}
 
+      {/* MODAL: Tambah Rekaman Tambahan Otomatis Setelah Bel */}
+      {isPostBellModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-slate-900 border border-amber-500/40 rounded-3xl max-w-xl w-full p-6 space-y-5 shadow-2xl relative">
+            <div className="flex items-center justify-between pb-4 border-b border-slate-800">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center border border-amber-500/30">
+                  <Radio className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base sm:text-lg font-black text-white">
+                    Tambah Rekaman Setelah Bel Berbunyi
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    Audio diputar otomatis setelah pengumuman bel jadwal yang dipilih selesai
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsPostBellModalOpen(false)}
+                className="text-slate-400 hover:text-white p-2 rounded-xl bg-slate-800 hover:bg-slate-700 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-1.5 bg-slate-950 p-1 rounded-2xl border border-slate-800">
+              <button
+                type="button"
+                onClick={() => setPostBellInputTab('upload')}
+                className={`py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer ${
+                  postBellInputTab === 'upload'
+                    ? 'bg-amber-500 text-slate-950 font-black'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <Upload className="w-3.5 h-3.5" />
+                <span>Upload File Audio</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setPostBellInputTab('url')}
+                className={`py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer ${
+                  postBellInputTab === 'url'
+                    ? 'bg-amber-500 text-slate-950 font-black'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <Globe className="w-3.5 h-3.5" />
+                <span>Link Cloud (Drive / URL)</span>
+              </button>
+            </div>
+
+            <form onSubmit={handleSavePostBellTrack} className="space-y-4">
+              {postBellInputTab === 'upload' ? (
+                <div className="space-y-2.5">
+                  {postBellUploadError && (
+                    <div className="bg-rose-500/10 border border-rose-500/30 text-rose-300 p-3 rounded-xl text-xs flex items-center gap-2">
+                      <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                      <span>{postBellUploadError}</span>
+                    </div>
+                  )}
+                  <div className="border-2 border-dashed border-slate-700 hover:border-amber-500 rounded-2xl p-5 text-center bg-slate-950/60 relative cursor-pointer">
+                    <input
+                      type="file"
+                      accept={AUDIO_FILE_ACCEPT}
+                      onChange={handlePostBellFileUpload}
+                      disabled={isUploadingPostBell}
+                      className="absolute inset-0 opacity-0 cursor-pointer z-10"
+                    />
+                    <Upload className="w-7 h-7 text-amber-400 mx-auto mb-1.5" />
+                    <p className="text-xs font-bold text-white">
+                      {isUploadingPostBell
+                        ? 'Memproses Berkas Rekaman...'
+                        : 'Klik atau seret file rekaman panjang (MP3, WAV, M4A, AAC, OGG)'}
+                    </p>
+                    <p className="text-[11px] text-slate-400 mt-0.5">
+                      Mendukung rekaman panjang 8+ menit (disimpan lokal IndexedDB / Cloudinary)
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-2 bg-slate-950/80 p-4 rounded-2xl border border-blue-500/30">
+                  <label className="text-xs font-bold text-blue-300 block">
+                    Tautan File Audio Online (Google Drive / Cloudinary / URL):
+                  </label>
+                  <input
+                    type="url"
+                    placeholder="https://drive.google.com/... atau https://.../rekaman-pulang.mp3"
+                    value={postBellCloudUrlInput}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setPostBellCloudUrlInput(val);
+                      setPostBellAudioUrl(normalizeAudioCloudUrl(val));
+                      setPostBellAudioName(val.split('/').pop()?.split('?')[0] || 'Rekaman_Cloud.mp3');
+                    }}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white placeholder-slate-500 font-mono focus:outline-none focus:border-blue-400"
+                  />
+                </div>
+              )}
+
+              {postBellAudioUrl && (
+                <div className="bg-amber-950/20 border border-amber-500/40 rounded-2xl p-3 flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <span className="text-xs font-bold text-amber-200 block truncate">
+                      {postBellAudioName}
+                    </span>
+                    <span className="text-[10px] text-amber-400 font-mono">
+                      {formatDurationLabel(postBellDuration) ? `Durasi ~${formatDurationLabel(postBellDuration)}` : 'Audio siap diputar'}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        openTrimmer({
+                          mode: 'post_bell_draft',
+                          audioUrl: postBellAudioUrl,
+                          title: postBellName || postBellAudioName || 'Rekaman Tambahan',
+                          fileName: postBellAudioName || 'rekaman.wav',
+                        })
+                      }
+                      className="bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/30 px-2.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
+                    >
+                      <Scissors className="w-3.5 h-3.5" />
+                      <span>Potong</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handlePlayPreview('post_bell_draft_preview', postBellAudioUrl, false)}
+                      className="bg-amber-500 text-slate-950 px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
+                    >
+                      <Play className="w-3.5 h-3.5 fill-current" />
+                      <span>Tes</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5">
+                  Judul / Nama Rekaman *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={postBellName}
+                  onChange={(e) => setPostBellName(e.target.value)}
+                  placeholder="misal: Nasehat / Musik Pulang 8 Menit (13:45)"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-amber-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5">
+                  Diputar Otomatis Setelah Jadwal Bel:
+                </label>
+                <select
+                  value={postBellTargetKey}
+                  onChange={(e) => setPostBellTargetKey(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-white focus:outline-none focus:border-amber-500 cursor-pointer"
+                >
+                  <option value="custom_time">🕒 Berdasarkan Jam Bel Tertentu (contoh: 13:45)</option>
+                  <option value="all">🔔 Setelah Semua Jadwal Bel Berbunyi</option>
+                  {schedules.length > 0 && (
+                    <optgroup label="Pilih Jadwal Bel Spesifik">
+                      {Array.from(new Map(schedules.map((s) => [`${s.time}-${s.label}`, s])).values())
+                        .sort((a, b) => a.time.localeCompare(b.time))
+                        .map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.time} WIB — {s.label}
+                          </option>
+                        ))}
+                    </optgroup>
+                  )}
+                </select>
+              </div>
+
+              {postBellTargetKey === 'custom_time' && (
+                <div>
+                  <label className="block text-xs font-bold text-amber-300 uppercase tracking-wider mb-1.5">
+                    Jam Bel Target (WIB):
+                  </label>
+                  <input
+                    type="time"
+                    value={postBellCustomTime}
+                    onChange={(e) => setPostBellCustomTime(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-sm font-mono font-bold text-amber-300 focus:outline-none focus:border-amber-500"
+                  />
+                </div>
+              )}
+
+              <div>
+                <div className="flex items-center justify-between text-xs mb-1">
+                  <span className="font-bold text-slate-300">Volume Rekaman Tambahan:</span>
+                  <span className="font-mono text-amber-300 font-bold">{Math.round(postBellVolume * 100)}%</span>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.05"
+                  value={postBellVolume}
+                  onChange={(e) => setPostBellVolume(parseFloat(e.target.value))}
+                  className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-amber-400"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setIsPostBellModalOpen(false)}
+                  className="px-4 py-2.5 rounded-xl text-xs font-bold text-slate-300 bg-slate-800 hover:bg-slate-700 cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={!postBellAudioUrl || !postBellName.trim() || isUploadingPostBell}
+                  className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-black px-6 py-2.5 rounded-xl text-xs flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                >
+                  <CheckCircle2 className="w-4 h-4" />
+                  <span>Simpan Rekaman Setelah Bel</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* MODAL: Pemotong Audio Nada Dering */}
       {trimmerTarget && (
         <AudioTrimmerModal
@@ -1393,16 +2066,59 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
           audioUrl={trimmerTarget.audioUrl}
           audioTitle={trimmerTarget.title}
           fileName={trimmerTarget.fileName}
-          isExistingChime={trimmerTarget.mode === 'existing'}
+          isExistingChime={
+            trimmerTarget.mode === 'existing' || trimmerTarget.mode === 'post_bell_existing'
+          }
           cloudinaryCloudName={settings.cloudinaryCloudName}
           cloudinaryUploadPreset={settings.cloudinaryUploadPreset}
-          onApplyTrim={(res) => {
+          onApplyTrim={async (res) => {
             if (trimmerTarget.mode === 'draft') {
               setAudioDataUrl(res.audioUrl);
               setAudioFileName(res.fileName);
               setAudioDuration(res.durationSec);
               if (res.audioUrl.startsWith('http')) {
                 setCloudUrlInput(res.audioUrl);
+              }
+            } else if (trimmerTarget.mode === 'post_bell_draft') {
+              let storedUrl = res.audioUrl;
+              if (storedUrl.startsWith('data:') && storedUrl.length > 900 * 1024) {
+                storedUrl = await saveAudioBlobToIDB(`postbell_${Date.now()}`, storedUrl);
+              }
+              setPostBellAudioUrl(storedUrl);
+              setPostBellAudioName(res.fileName);
+              setPostBellDuration(res.durationSec);
+              if (storedUrl.startsWith('http')) {
+                setPostBellCloudUrlInput(storedUrl);
+              }
+            } else if (trimmerTarget.mode === 'post_bell_existing' && trimmerTarget.postBellTrack) {
+              const targetTrack = trimmerTarget.postBellTrack;
+              let storedUrl = res.audioUrl;
+              if (storedUrl.startsWith('data:') && storedUrl.length > 900 * 1024) {
+                storedUrl = await saveAudioBlobToIDB(`postbell_${Date.now()}`, storedUrl);
+              }
+              if (res.saveMode === 'replace') {
+                onUpdateSettings({
+                  ...settings,
+                  postBellTracks: postBellTracks.map((t) =>
+                    t.id === targetTrack.id
+                      ? { ...t, audioUrl: storedUrl, audioName: res.fileName, durationSec: res.durationSec }
+                      : t
+                  ),
+                });
+              } else {
+                const newTrack: PostBellTrack = {
+                  ...targetTrack,
+                  id: `postbell_${Date.now()}`,
+                  name: `${targetTrack.name} (Potongan)`,
+                  audioUrl: storedUrl,
+                  audioName: res.fileName,
+                  durationSec: res.durationSec,
+                  createdAt: Date.now(),
+                };
+                onUpdateSettings({
+                  ...settings,
+                  postBellTracks: [newTrack, ...postBellTracks],
+                });
               }
             } else if (trimmerTarget.mode === 'existing' && trimmerTarget.chime) {
               const targetChime = trimmerTarget.chime;

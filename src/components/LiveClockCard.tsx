@@ -10,9 +10,13 @@ import {
   CheckCircle2,
   ChevronDown,
   VolumeX,
+  Pause,
+  Play,
+  Square,
 } from 'lucide-react';
 import { DayOfWeek, TimeSyncInfo, ScheduleItem } from '../types';
 import { getIndonesianDayName } from '../utils/timeSync';
+import { BellPlaybackState } from '../utils/audioSynth';
 
 interface LiveClockCardProps {
   currentTime: Date;
@@ -27,6 +31,9 @@ interface LiveClockCardProps {
   onTriggerScheduleBell?: (item: ScheduleItem) => void;
   disabledDays?: DayOfWeek[];
   onToggleDisabledDay?: (day: DayOfWeek) => void;
+  bellPlayback?: BellPlaybackState;
+  onTogglePauseBell?: () => void;
+  onStopBell?: () => void;
 }
 
 export const LiveClockCard: React.FC<LiveClockCardProps> = ({
@@ -42,6 +49,9 @@ export const LiveClockCard: React.FC<LiveClockCardProps> = ({
   onTriggerScheduleBell,
   disabledDays = [0],
   onToggleDisabledDay,
+  bellPlayback,
+  onTogglePauseBell,
+  onStopBell,
 }) => {
   const daysList: { num: DayOfWeek; name: string }[] = [
     { num: 1, name: 'Senin' },
@@ -145,6 +155,41 @@ export const LiveClockCard: React.FC<LiveClockCardProps> = ({
                   <Bell className="w-3 h-3" />
                   <span>Bel {latestScheduleItem.time}</span>
                 </button>
+              )}
+              {bellPlayback?.isPlaying && (
+                <>
+                  {onTogglePauseBell && (
+                    <button
+                      type="button"
+                      onClick={onTogglePauseBell}
+                      title={bellPlayback.isPaused ? 'Lanjutkan suara bel' : 'Jeda (Pause) suara bel'}
+                      className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-800 hover:text-white bg-amber-100 hover:bg-amber-500 px-2 py-0.5 rounded-lg border border-amber-300 transition-all cursor-pointer shadow-2xs active:scale-95"
+                    >
+                      {bellPlayback.isPaused ? (
+                        <>
+                          <Play className="w-3 h-3 fill-current" />
+                          <span>Lanjut</span>
+                        </>
+                      ) : (
+                        <>
+                          <Pause className="w-3 h-3 fill-current" />
+                          <span>Pause</span>
+                        </>
+                      )}
+                    </button>
+                  )}
+                  {onStopBell && (
+                    <button
+                      type="button"
+                      onClick={onStopBell}
+                      title="Hentikan suara bel sekarang"
+                      className="inline-flex items-center gap-1 text-[11px] font-bold text-rose-700 hover:text-white bg-rose-50 hover:bg-rose-600 px-2 py-0.5 rounded-lg border border-rose-200 hover:border-rose-600 transition-all cursor-pointer shadow-2xs active:scale-95"
+                    >
+                      <Square className="w-2.5 h-2.5 fill-current" />
+                      <span>Berhenti</span>
+                    </button>
+                  )}
+                </>
               )}
             </div>
           </div>

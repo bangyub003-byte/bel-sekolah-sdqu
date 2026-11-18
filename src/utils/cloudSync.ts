@@ -70,12 +70,23 @@ export function sanitizeAudioSettingsForCloud(settings: AudioSettings): AudioSet
     })
   ).filter((c) => c.audioUrl);
 
+  const postBellTracks = (settings.postBellTracks || []).map((t) =>
+    stripUndefinedDeep({
+      ...t,
+      audioUrl:
+        t.audioUrl && t.audioUrl.startsWith('idb-audio://')
+          ? ''
+          : sanitizeAudioUrlForCloud(t.audioUrl) || '',
+    })
+  ).filter((t) => t.audioUrl);
+
   return stripUndefinedDeep({
     ...settings,
     customPrefixAudioUrl: sanitizeAudioUrlForCloud(settings.customPrefixAudioUrl),
     globalOutroChimeUrl: sanitizeAudioUrlForCloud(settings.globalOutroChimeUrl),
     clonedProfiles,
     customChimes,
+    postBellTracks,
   });
 }
 

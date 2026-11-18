@@ -14,9 +14,12 @@ import {
   XCircle,
   Layers,
   VolumeX,
+  Pause,
+  Square,
 } from 'lucide-react';
 import { ScheduleItem, DayOfWeek, BellCategory, AudioSettings } from '../types';
 import { getIndonesianDayName } from '../utils/timeSync';
+import { BellPlaybackState } from '../utils/audioSynth';
 
 interface ScheduleListProps {
   schedules: ScheduleItem[];
@@ -32,6 +35,9 @@ interface ScheduleListProps {
   onOpenAddExtraPeriods: () => void;
   onResetToDefault: () => void;
   onImportExport: () => void;
+  bellPlayback?: BellPlaybackState;
+  onTogglePauseBell?: () => void;
+  onStopBell?: () => void;
 }
 
 export const ScheduleList: React.FC<ScheduleListProps> = ({
@@ -48,6 +54,9 @@ export const ScheduleList: React.FC<ScheduleListProps> = ({
   onOpenAddExtraPeriods,
   onResetToDefault,
   onImportExport,
+  bellPlayback,
+  onTogglePauseBell,
+  onStopBell,
 }) => {
   const isSelectedDayDisabled = disabledDays.includes(selectedDay);
   const [searchQuery, setSearchQuery] = useState('');
@@ -389,16 +398,52 @@ export const ScheduleList: React.FC<ScheduleListProps> = ({
                 </div>
 
                 {/* Right: Actions */}
-                <div className="flex items-center gap-2 w-full md:w-auto justify-end pt-2 md:pt-0 border-t md:border-0 border-slate-100">
-                  {/* Test Play Sound */}
-                  <button
-                    onClick={() => onTestScheduleItem(item)}
-                    className="bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all active:scale-95 cursor-pointer"
-                    title="Uji Bunyi Nada & Speech Ucapan"
-                  >
-                    <Play className="w-3.5 h-3.5 fill-current" />
-                    <span>Tes Bunyi</span>
-                  </button>
+                <div className="flex flex-wrap items-center gap-2 w-full md:w-auto justify-end pt-2 md:pt-0 border-t md:border-0 border-slate-100">
+                  {bellPlayback?.isPlaying && bellPlayback.scheduleId === item.id ? (
+                    <>
+                      {onTogglePauseBell && (
+                        <button
+                          type="button"
+                          onClick={onTogglePauseBell}
+                          className="bg-amber-500 hover:bg-amber-600 text-white px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all active:scale-95 cursor-pointer"
+                          title={bellPlayback.isPaused ? 'Lanjutkan suara bel' : 'Jeda (Pause) suara bel'}
+                        >
+                          {bellPlayback.isPaused ? (
+                            <>
+                              <Play className="w-3.5 h-3.5 fill-current" />
+                              <span>Lanjut</span>
+                            </>
+                          ) : (
+                            <>
+                              <Pause className="w-3.5 h-3.5 fill-current" />
+                              <span>Pause</span>
+                            </>
+                          )}
+                        </button>
+                      )}
+                      {onStopBell && (
+                        <button
+                          type="button"
+                          onClick={onStopBell}
+                          className="bg-rose-600 hover:bg-rose-700 text-white px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all active:scale-95 cursor-pointer"
+                          title="Hentikan suara bel sekarang"
+                        >
+                          <Square className="w-3.5 h-3.5 fill-current" />
+                          <span>Berhenti</span>
+                        </button>
+                      )}
+                    </>
+                  ) : (
+                    /* Test Play Sound */
+                    <button
+                      onClick={() => onTestScheduleItem(item)}
+                      className="bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all active:scale-95 cursor-pointer"
+                      title="Uji Bunyi Nada & Speech Ucapan"
+                    >
+                      <Play className="w-3.5 h-3.5 fill-current" />
+                      <span>Tes Bunyi</span>
+                    </button>
+                  )}
 
                   {/* Toggle Active */}
                   <button

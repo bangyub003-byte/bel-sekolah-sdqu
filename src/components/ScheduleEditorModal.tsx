@@ -19,10 +19,19 @@ import {
   Globe,
   Languages,
   Loader2,
+  Pause,
 } from 'lucide-react';
 import { ScheduleItem, DayOfWeek, BellCategory, ChimeType, AudioSettings, AudioType, SpeechLanguage, SpeechInputMode } from '../types';
 import { AudioRecorder } from './AudioRecorder';
-import { playBellSequence, playChimeTone, translateSpeechWithAI } from '../utils/audioSynth';
+import {
+  playBellSequence,
+  playChimeTone,
+  translateSpeechWithAI,
+  BellPlaybackState,
+  subscribeBellPlaybackState,
+  togglePauseBellPlayback,
+  stopAllBellAudio,
+} from '../utils/audioSynth';
 
 export interface BatchVoiceApplyOptions {
   applyVoiceToAll: boolean;
@@ -95,6 +104,16 @@ export const ScheduleEditorModal: React.FC<ScheduleEditorModalProps> = ({
   const [isPlayingTest, setIsPlayingTest] = useState(false);
   const [isPlayingChimeOnly, setIsPlayingChimeOnly] = useState(false);
   const [showCloneTutorial, setShowCloneTutorial] = useState(false);
+  const [bellPlayback, setBellPlayback] = useState<BellPlaybackState | null>(null);
+
+  useEffect(() => {
+    return subscribeBellPlaybackState((s) => {
+      setBellPlayback(s);
+      if (!s.isPlaying) {
+        setIsPlayingTest(false);
+      }
+    });
+  }, []);
 
   useEffect(() => {
     if (editingItem) {
@@ -722,54 +741,89 @@ export const ScheduleEditorModal: React.FC<ScheduleEditorModalProps> = ({
                   <Play className="w-3.5 h-3.5 text-blue-600" />
                   Alur Urutan Bunyi Bel
                 </span>
-                <button
-                  type="button"
-                  disabled={isPlayingTest || isTranslating}
-                  onClick={async () => {
-                    setIsPlayingTest(true);
-                    try {
-                      let effectiveTranslation = translatedSpeechText;
-                      if (speechLanguage !== 'id' && speechInputMode === 'auto_translate' && !effectiveTranslation.trim()) {
-                        const res = await runTranslationFor(speechLanguage, speechText);
-                        if (!res) {
-                          return;
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    disabled={isPlayingTest || isTranslating}
+                    onClick={async () => {
+                      setIsPlayingTest(true);
+                      try {
+                        let effectiveTranslation = translatedSpeechText;
+                        if (speechLanguage !== 'id' && speechInputMode === 'auto_translate' && !effectiveTranslation.trim()) {
+                          const res = await runTranslationFor(speechLanguage, speechText);
+                          if (!res) {
+                            return;
+                          }
+                          effectiveTranslation = res;
                         }
-                        effectiveTranslation = res;
+                        await onTestSound(
+                          chimeType,
+                          speechText,
+                          customAudioUrl,
+                          audioType,
+                          clonedVoiceId,
+                          outroChimeType !== 'none',
+                          outroChimeType,
+                          speechLanguage,
+                          speechInputMode,
+                          effectiveTranslation
+                        );
+                      } finally {
+                        setIsPlayingTest(false);
                       }
-                      await onTestSound(
-                        chimeType,
-                        speechText,
-                        customAudioUrl,
-                        audioType,
-                        clonedVoiceId,
-                        outroChimeType !== 'none',
-                        outroChimeType,
-                        speechLanguage,
-                        speechInputMode,
-                        effectiveTranslation
-                      );
-                    } finally {
-                      setIsPlayingTest(false);
-                    }
-                  }}
-                  className={`text-xs font-bold flex items-center gap-1.5 cursor-pointer px-3 py-1.5 rounded-xl border shadow-xs transition-all active:scale-95 ${
-                    isPlayingTest
-                      ? 'bg-amber-50 border-amber-300 text-amber-700 animate-pulse'
-                      : 'bg-white border-blue-300 text-blue-700 hover:bg-blue-50'
-                  }`}
-                >
-                  {isPlayingTest ? (
+                    }}
+                    className={`text-xs font-bold flex items-center gap-1.5 cursor-pointer px-3 py-1.5 rounded-xl border shadow-xs transition-all active:scale-95 ${
+                      isPlayingTest
+                        ? 'bg-amber-50 border-amber-300 text-amber-700 animate-pulse'
+                        : 'bg-white border-blue-300 text-blue-700 hover:bg-blue-50'
+                    }`}
+                  >
+                    {isPlayingTest ? (
+                      <>
+                        <span className="w-2 h-2 rounded-full bg-amber-500 animate-ping" />
+                        <span>{bellPlayback?.isPaused ? 'Dijeda...' : 'Memutar Suara Bel...'}</span>
+                      </>
+                    ) : (
+                      <>
+                        <Play className="w-3.5 h-3.5 fill-current" />
+                        <span>Tes Putar Seluruh Urutan</span>
+                      </>
+                    )}
+                  </button>
+
+                  {(isPlayingTest || bellPlayback?.isPlaying) && (
                     <>
-                      <span className="w-2 h-2 rounded-full bg-amber-500 animate-ping" />
-                      <span>Memutar Suara Bel...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Play className="w-3.5 h-3.5 fill-current" />
-                      <span>Tes Putar Seluruh Urutan</span>
+                      <button
+                        type="button"
+                        onClick={togglePauseBellPlayback}
+                        className="text-xs font-bold flex items-center gap-1 cursor-pointer px-2.5 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white shadow-xs"
+                      >
+                        {bellPlayback?.isPaused ? (
+                          <>
+                            <Play className="w-3.5 h-3.5 fill-current" />
+                            <span>Lanjut</span>
+                          </>
+                        ) : (
+                          <>
+                            <Pause className="w-3.5 h-3.5 fill-current" />
+                            <span>Pause</span>
+                          </>
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          stopAllBellAudio();
+                          setIsPlayingTest(false);
+                        }}
+                        className="text-xs font-bold flex items-center gap-1 cursor-pointer px-2.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white shadow-xs"
+                      >
+                        <Square className="w-3 h-3 fill-current" />
+                        <span>Berhenti</span>
+                      </button>
                     </>
                   )}
-                </button>
+                </div>
               </div>
 
               <div className="grid grid-cols-3 gap-2 text-center text-xs">

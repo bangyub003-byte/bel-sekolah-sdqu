@@ -1,15 +1,63 @@
-import { ChimeType, AudioSettings, CustomChime, SpeechLanguage, SpeechInputMode } from '../types';
-import { playUniversalAudio, stopAllCustomAudio } from './universalAudioPlayer';
+import { ChimeType, AudioSettings, CustomChime, SpeechLanguage, SpeechInputMode, PostBellTrack } from '../types';
+import {
+  playUniversalAudio,
+  stopAllCustomAudio,
+  pauseCustomAudio,
+  resumeCustomAudio,
+} from './universalAudioPlayer';
+
+export interface BellPlaybackState {
+  isPlaying: boolean;
+  isPaused: boolean;
+  label: string | null;
+  scheduleId?: string | null;
+  postBellTrackId?: string | null;
+  phase: 'idle' | 'chime' | 'speech' | 'outro' | 'post_bell';
+}
 
 let audioCtx: AudioContext | null = null;
 let activeBellSequenceId = 0;
 let activeChimeGain: GainNode | null = null;
-let activeChimeTimeout: ReturnType<typeof setTimeout> | null = null;
+let activeChimeTimeout: ReturnType<typeof setInterval> | null = null;
 let activeChimeResolve: (() => void) | null = null;
+let activeSpeechAbort: (() => void) | null = null;
+let activeDelayAbort: (() => void) | null = null;
+
+let playbackState: BellPlaybackState = {
+  isPlaying: false,
+  isPaused: false,
+  label: null,
+  scheduleId: null,
+  postBellTrackId: null,
+  phase: 'idle',
+};
+
+const playbackListeners = new Set<(state: BellPlaybackState) => void>();
+
+function setBellPlaybackState(partial: Partial<BellPlaybackState>): void {
+  playbackState = { ...playbackState, ...partial };
+  playbackListeners.forEach((cb) => {
+    try {
+      cb(playbackState);
+    } catch {}
+  });
+}
+
+export function getBellPlaybackState(): BellPlaybackState {
+  return playbackState;
+}
+
+export function subscribeBellPlaybackState(listener: (state: BellPlaybackState) => void): () => void {
+  playbackListeners.add(listener);
+  listener(playbackState);
+  return () => {
+    playbackListeners.delete(listener);
+  };
+}
 
 export function stopAllChimes(): void {
   if (activeChimeTimeout) {
-    clearTimeout(activeChimeTimeout);
+    clearInterval(activeChimeTimeout);
     activeChimeTimeout = null;
   }
   if (activeChimeGain && audioCtx) {
@@ -27,12 +75,86 @@ export function stopAllChimes(): void {
   }
 }
 
+export function stopAllBellAudio(): void {
+  activeBellSequenceId++;
+  stopAllChimes();
+  stopAllCustomAudio();
+
+  if (activeDelayAbort) {
+    const fn = activeDelayAbort;
+    activeDelayAbort = null;
+    fn();
+  }
+
+  if (activeSpeechAbort) {
+    const fn = activeSpeechAbort;
+    activeSpeechAbort = null;
+    fn();
+  }
+
+  if ('speechSynthesis' in window) {
+    try {
+      window.speechSynthesis.cancel();
+    } catch {}
+  }
+
+  if (audioCtx && audioCtx.state === 'suspended') {
+    audioCtx.resume().catch(() => {});
+  }
+
+  setBellPlaybackState({
+    isPlaying: false,
+    isPaused: false,
+    label: null,
+    scheduleId: null,
+    postBellTrackId: null,
+    phase: 'idle',
+  });
+}
+
+export function pauseBellPlayback(): void {
+  if (!playbackState.isPlaying || playbackState.isPaused) return;
+  pauseCustomAudio();
+  if (audioCtx && audioCtx.state === 'running') {
+    audioCtx.suspend().catch(() => {});
+  }
+  if ('speechSynthesis' in window && window.speechSynthesis.speaking && !window.speechSynthesis.paused) {
+    try {
+      window.speechSynthesis.pause();
+    } catch {}
+  }
+  setBellPlaybackState({ isPaused: true });
+}
+
+export function resumeBellPlayback(): void {
+  if (!playbackState.isPlaying || !playbackState.isPaused) return;
+  if (audioCtx && audioCtx.state === 'suspended') {
+    audioCtx.resume().catch(() => {});
+  }
+  resumeCustomAudio();
+  if ('speechSynthesis' in window && window.speechSynthesis.paused) {
+    try {
+      window.speechSynthesis.resume();
+    } catch {}
+  }
+  setBellPlaybackState({ isPaused: false });
+}
+
+export function togglePauseBellPlayback(): void {
+  if (!playbackState.isPlaying) return;
+  if (playbackState.isPaused) {
+    resumeBellPlayback();
+  } else {
+    pauseBellPlayback();
+  }
+}
+
 export function getAudioContext(): AudioContext {
   if (!audioCtx) {
     const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     audioCtx = new AudioContextClass();
   }
-  if (audioCtx.state === 'suspended') {
+  if (audioCtx.state === 'suspended' && !playbackState.isPaused) {
     audioCtx.resume();
   }
   return audioCtx;
@@ -365,19 +487,27 @@ export async function playChimeTone(
         totalDuration = 5.5;
       }
 
-      activeChimeTimeout = setTimeout(() => {
-        activeChimeTimeout = null;
-        if (activeChimeGain === volNode) {
-          try {
-            volNode.disconnect();
-          } catch {}
-          activeChimeGain = null;
+      const targetEndCtxTime = now + totalDuration;
+      activeChimeTimeout = setInterval(() => {
+        if (playbackState.isPaused) return;
+        const currentCtxTime = ctx.currentTime;
+        if (currentCtxTime >= targetEndCtxTime) {
+          if (activeChimeTimeout) {
+            clearInterval(activeChimeTimeout);
+            activeChimeTimeout = null;
+          }
+          if (activeChimeGain === volNode) {
+            try {
+              volNode.disconnect();
+            } catch {}
+            activeChimeGain = null;
+          }
+          if (activeChimeResolve === resolve) {
+            activeChimeResolve = null;
+          }
+          resolve();
         }
-        if (activeChimeResolve === resolve) {
-          activeChimeResolve = null;
-        }
-        resolve();
-      }, totalDuration * 1000);
+      }, 120);
     } catch (err) {
       console.error('Audio synth error:', err);
       activeChimeResolve = null;
@@ -737,12 +867,17 @@ export async function speakTTS(
       }
 
       let timeoutTimer: any = null;
+      let finished = false;
       const finishHandler = () => {
+        if (finished) return;
+        finished = true;
         if (timeoutTimer) clearTimeout(timeoutTimer);
+        if (activeSpeechAbort === finishHandler) activeSpeechAbort = null;
         activeSpeechUtterance = null;
         resolve();
       };
 
+      activeSpeechAbort = finishHandler;
       utterance.onend = finishHandler;
       utterance.onerror = (err) => {
         console.warn('SpeechSynthesis error:', err);
@@ -789,10 +924,98 @@ export async function playCustomAudio(dataUrl: string, volume = 1.0): Promise<bo
 }
 
 /**
+ * Abortable & pause-aware sleep helper for sequence transitions
+ */
+function delaySequence(ms: number, seqId: number): Promise<void> {
+  return new Promise((resolve) => {
+    let remaining = ms;
+    let lastTick = Date.now();
+    const interval = setInterval(() => {
+      if (seqId !== activeBellSequenceId) {
+        clearInterval(interval);
+        if (activeDelayAbort === abortFn) activeDelayAbort = null;
+        resolve();
+        return;
+      }
+      const now = Date.now();
+      const dt = now - lastTick;
+      lastTick = now;
+      if (!playbackState.isPaused) {
+        remaining -= dt;
+      }
+      if (remaining <= 0) {
+        clearInterval(interval);
+        if (activeDelayAbort === abortFn) activeDelayAbort = null;
+        resolve();
+      }
+    }, 60);
+
+    const abortFn = () => {
+      clearInterval(interval);
+      resolve();
+    };
+    activeDelayAbort = abortFn;
+  });
+}
+
+/**
+ * Pause-aware helper: if user hits Pause right at the boundary of finishing speech/chime,
+ * wait until resumed or stopped before moving on.
+ */
+async function waitIfPaused(seqId: number): Promise<void> {
+  while (playbackState.isPaused && seqId === activeBellSequenceId) {
+    await new Promise((res) => setTimeout(res, 100));
+  }
+}
+
+export interface PlayBellSequenceOptions {
+  label?: string;
+  scheduleId?: string;
+  scheduleTime?: string;
+  skipPostBellTracks?: boolean;
+}
+
+/**
+ * Standalone preview/playback for a Post-Bell Track with full global Pause/Resume/Stop support
+ */
+export async function playPostBellTrack(
+  track: PostBellTrack,
+  masterVolume = 1.0
+): Promise<void> {
+  stopAllBellAudio();
+  const seqId = activeBellSequenceId;
+  setBellPlaybackState({
+    isPlaying: true,
+    isPaused: false,
+    label: track.name || 'Rekaman Tambahan Bel',
+    scheduleId: null,
+    postBellTrackId: track.id,
+    phase: 'post_bell',
+  });
+
+  try {
+    const vol = Math.max(0, Math.min(1, (track.volume ?? 1.0) * masterVolume));
+    await playCustomAudio(track.audioUrl, vol);
+  } finally {
+    if (seqId === activeBellSequenceId) {
+      setBellPlaybackState({
+        isPlaying: false,
+        isPaused: false,
+        label: null,
+        scheduleId: null,
+        postBellTrackId: null,
+        phase: 'idle',
+      });
+    }
+  }
+}
+
+/**
  * Full sequence:
  * Step 1: Play Intro Bell Chime
  * Step 2: Play Custom Voice Recording (VO) / Cloned Voice / TTS Speech
  * Step 3: Play Outro / Closing Bell Chime (Optional or Configured)
+ * Step 4: Play Matching Scheduled Post-Bell Recording (Optional, from Menu Nada Dering)
  */
 export async function playBellSequence(
   chimeType: ChimeType,
@@ -808,191 +1031,263 @@ export async function playBellSequence(
   customOutroChimeUrl?: string,
   speechLanguage: SpeechLanguage = 'id',
   speechInputMode: SpeechInputMode = 'auto_translate',
-  translatedSpeechText?: string
+  translatedSpeechText?: string,
+  options?: PlayBellSequenceOptions
 ): Promise<void> {
   // Prevent double sound / overlapping: increment sequence token and stop ALL chimes, custom audio, and speech
+  stopAllBellAudio();
   const seqId = ++activeBellSequenceId;
-  stopAllChimes();
-  stopAllCustomAudio();
-  if ('speechSynthesis' in window) {
-    try {
-      window.speechSynthesis.cancel();
-    } catch {}
-  }
 
-  const combinedVolume = (settings.chimeVolume ?? 1.0) * itemVolume;
-  const speechVolume = (settings.volume ?? 1.0) * itemVolume;
+  const sequenceLabel = options?.label || 'Bel Sekolah';
+  setBellPlaybackState({
+    isPlaying: true,
+    isPaused: false,
+    label: sequenceLabel,
+    scheduleId: options?.scheduleId || null,
+    postBellTrackId: null,
+    phase: 'chime',
+  });
 
-  const actualChimeType = chimeType || (settings.useCustomDefaultChime && settings.defaultChimeId ? settings.defaultChimeId : 'westminster');
+  try {
+    const combinedVolume = (settings.chimeVolume ?? 1.0) * itemVolume;
+    const speechVolume = (settings.volume ?? 1.0) * itemVolume;
 
-  const targetVoiceId = clonedVoiceId || (settings.useClonedVoice ? settings.activeClonedVoiceId : undefined);
-  const activeProfile = settings.clonedProfiles?.find((p) => p.id === targetVoiceId);
-  const useMultilingualAi = speechLanguage !== 'id';
-  const useStandardMaleAi = audioType === 'tts' && settings.enableTTS !== false;
-  const shouldGenerateAiAudio = audioType === 'cloned' || useMultilingualAi || useStandardMaleAi;
+    const actualChimeType =
+      chimeType ||
+      (settings.useCustomDefaultChime && settings.defaultChimeId ? settings.defaultChimeId : 'westminster');
 
-  // Resolve final spoken text and prefetch AI audio CONCURRENTLY while the intro chime rings
-  let resolvedSpokenText = fullText;
-  const prepareTextAndAudioPromise = (async (): Promise<{
-    spokenText: string;
-    aiAudioUrl: string | null;
-  }> => {
-    let textToSpeak = fullText;
+    const targetVoiceId =
+      clonedVoiceId || (settings.useClonedVoice ? settings.activeClonedVoiceId : undefined);
+    const activeProfile = settings.clonedProfiles?.find((p) => p.id === targetVoiceId);
+    const useMultilingualAi = speechLanguage !== 'id';
+    const useStandardMaleAi = audioType === 'tts' && settings.enableTTS !== false;
+    const shouldGenerateAiAudio = audioType === 'cloned' || useMultilingualAi || useStandardMaleAi;
 
-    if (useMultilingualAi) {
-      if (speechInputMode === 'direct_text') {
-        textToSpeak = translatedSpeechText?.trim() || fullText;
-      } else {
-        // auto_translate mode: use pre-translated text if available, otherwise translate from Indonesian on the fly
-        if (translatedSpeechText && translatedSpeechText.trim()) {
-          textToSpeak = translatedSpeechText.trim();
-        } else if (fullText.trim()) {
-          const translated = await translateSpeechWithAI(fullText, speechLanguage);
-          if (translated) {
-            textToSpeak = translated;
+    // Resolve final spoken text and prefetch AI audio CONCURRENTLY while the intro chime rings
+    let resolvedSpokenText = fullText;
+    const prepareTextAndAudioPromise = (async (): Promise<{
+      spokenText: string;
+      aiAudioUrl: string | null;
+    }> => {
+      let textToSpeak = fullText;
+
+      if (useMultilingualAi) {
+        if (speechInputMode === 'direct_text') {
+          textToSpeak = translatedSpeechText?.trim() || fullText;
+        } else {
+          if (translatedSpeechText && translatedSpeechText.trim()) {
+            textToSpeak = translatedSpeechText.trim();
+          } else if (fullText.trim()) {
+            const translated = await translateSpeechWithAI(fullText, speechLanguage);
+            if (translated) {
+              textToSpeak = translated;
+            }
+          }
+        }
+      }
+
+      resolvedSpokenText = textToSpeak;
+
+      if (
+        shouldGenerateAiAudio &&
+        textToSpeak.trim().length > 0 &&
+        !(
+          audioType === 'cloned' &&
+          !useMultilingualAi &&
+          activeProfile?.playbackMode === 'direct_recording' &&
+          activeProfile.sampleAudioUrl
+        )
+      ) {
+        const voiceFallback =
+          audioType === 'tts'
+            ? 'Fenrir'
+            : activeProfile?.prebuiltVoiceFallback || (targetVoiceId === 'Puck' ? 'Puck' : 'Fenrir');
+
+        const audioUrl = await generateClonedTTSAudio(
+          textToSpeak,
+          undefined,
+          voiceFallback,
+          audioType === 'tts' ? 'Suara Pria AI' : activeProfile?.name,
+          speechLanguage
+        );
+        return { spokenText: textToSpeak, aiAudioUrl: audioUrl };
+      }
+
+      return { spokenText: textToSpeak, aiAudioUrl: null };
+    })();
+
+    // Step 1: Play Intro Chime ONCE
+    if (actualChimeType !== 'none') {
+      await playChimeTone(actualChimeType, combinedVolume, settings.customChimes, customChimeUrl);
+      await waitIfPaused(seqId);
+      if (seqId !== activeBellSequenceId) return;
+    }
+
+    // Crisp, natural pause between chime and speech (250ms)
+    await delaySequence(250, seqId);
+    if (seqId !== activeBellSequenceId) return;
+
+    const prepared = await prepareTextAndAudioPromise;
+    await waitIfPaused(seqId);
+    if (seqId !== activeBellSequenceId) return;
+    resolvedSpokenText = prepared.spokenText;
+
+    setBellPlaybackState({ phase: 'speech' });
+
+    // Step 2: Play Voice (Direct Audio Recording, AI Cloned/Multilingual Voice, or Male AI TTS)
+    if (audioType === 'recording' && customAudioUrl) {
+      const repeatCount = Math.max(1, settings.repeatSpeechCount || 1);
+      for (let i = 0; i < repeatCount; i++) {
+        if (seqId !== activeBellSequenceId) return;
+        await playCustomAudio(customAudioUrl, speechVolume);
+        await waitIfPaused(seqId);
+        if (seqId !== activeBellSequenceId) return;
+        if (i < repeatCount - 1) {
+          await delaySequence(500, seqId);
+        }
+      }
+    } else if (
+      audioType === 'cloned' &&
+      !useMultilingualAi &&
+      activeProfile?.playbackMode === 'direct_recording' &&
+      activeProfile.sampleAudioUrl
+    ) {
+      const repeatCount = Math.max(1, settings.repeatSpeechCount || 1);
+      for (let i = 0; i < repeatCount; i++) {
+        if (seqId !== activeBellSequenceId) return;
+        await playCustomAudio(activeProfile.sampleAudioUrl, speechVolume);
+        await waitIfPaused(seqId);
+        if (seqId !== activeBellSequenceId) return;
+        if (i < repeatCount - 1) {
+          await delaySequence(500, seqId);
+        }
+      }
+    } else if (shouldGenerateAiAudio) {
+      if (!useMultilingualAi && settings.useCustomPrefixAudio && settings.customPrefixAudioUrl) {
+        await playCustomAudio(settings.customPrefixAudioUrl, speechVolume);
+        await waitIfPaused(seqId);
+        if (seqId !== activeBellSequenceId) return;
+        await delaySequence(250, seqId);
+        if (seqId !== activeBellSequenceId) return;
+      }
+
+      const aiAudioUrl = prepared.aiAudioUrl;
+      let aiPlayed = false;
+
+      if (aiAudioUrl) {
+        const repeatCount = Math.max(1, settings.repeatSpeechCount || 1);
+        for (let i = 0; i < repeatCount; i++) {
+          if (seqId !== activeBellSequenceId) return;
+          const ok = await playCustomAudio(aiAudioUrl, speechVolume);
+          await waitIfPaused(seqId);
+          if (seqId !== activeBellSequenceId) return;
+          if (ok) aiPlayed = true;
+          if (i < repeatCount - 1) {
+            await delaySequence(500, seqId);
+          }
+        }
+      }
+      if (!aiPlayed && resolvedSpokenText.trim().length > 0 && seqId === activeBellSequenceId) {
+        const fallbackVoiceId = audioType === 'tts' ? 'Fenrir' : targetVoiceId;
+        await speakTTS(resolvedSpokenText, settings, fallbackVoiceId, true, speechLanguage);
+        await waitIfPaused(seqId);
+      }
+    } else {
+      if (settings.useCustomPrefixAudio && settings.customPrefixAudioUrl) {
+        await playCustomAudio(settings.customPrefixAudioUrl, speechVolume);
+        await waitIfPaused(seqId);
+        if (seqId !== activeBellSequenceId) return;
+        await delaySequence(250, seqId);
+        if (seqId !== activeBellSequenceId) return;
+      }
+
+      if (settings.enableTTS && resolvedSpokenText.trim().length > 0) {
+        const repeatCount = Math.max(1, settings.repeatSpeechCount || 1);
+        for (let i = 0; i < repeatCount; i++) {
+          if (seqId !== activeBellSequenceId) return;
+          await speakTTS(resolvedSpokenText, settings, 'Fenrir', false, speechLanguage);
+          await waitIfPaused(seqId);
+          if (seqId !== activeBellSequenceId) return;
+          if (i < repeatCount - 1) {
+            await delaySequence(500, seqId);
           }
         }
       }
     }
 
-    resolvedSpokenText = textToSpeak;
-
-    // If audioType is 'tts' (TTS Pria AI), strictly enforce Male Gemini voice 'Fenrir' (ignore any female cloned profiles)
-    if (shouldGenerateAiAudio && textToSpeak.trim().length > 0 && !(audioType === 'cloned' && !useMultilingualAi && activeProfile?.playbackMode === 'direct_recording' && activeProfile.sampleAudioUrl)) {
-      const voiceFallback =
-        audioType === 'tts'
-          ? 'Fenrir'
-          : activeProfile?.prebuiltVoiceFallback || (targetVoiceId === 'Puck' ? 'Puck' : 'Fenrir');
-
-      const audioUrl = await generateClonedTTSAudio(
-        textToSpeak,
-        undefined,
-        voiceFallback,
-        audioType === 'tts' ? 'Suara Pria AI' : activeProfile?.name,
-        speechLanguage
-      );
-      return { spokenText: textToSpeak, aiAudioUrl: audioUrl };
-    }
-
-    return { spokenText: textToSpeak, aiAudioUrl: null };
-  })();
-
-  // Step 1: Play Intro Chime ONCE
-  if (actualChimeType !== 'none') {
-    await playChimeTone(actualChimeType, combinedVolume, settings.customChimes, customChimeUrl);
-    if (seqId !== activeBellSequenceId) return;
-  }
-
-  // Crisp, natural pause between chime and speech (250ms)
-  await new Promise((res) => setTimeout(res, 250));
-  if (seqId !== activeBellSequenceId) return;
-
-  const prepared = await prepareTextAndAudioPromise;
-  if (seqId !== activeBellSequenceId) return;
-  resolvedSpokenText = prepared.spokenText;
-
-  // Step 2: Play Voice (Direct Audio Recording, AI Cloned/Multilingual Voice, or Male AI TTS)
-  if (audioType === 'recording' && customAudioUrl) {
-    const repeatCount = Math.max(1, settings.repeatSpeechCount || 1);
-    for (let i = 0; i < repeatCount; i++) {
-      if (seqId !== activeBellSequenceId) return;
-      await playCustomAudio(customAudioUrl, speechVolume);
-      if (seqId !== activeBellSequenceId) return;
-      if (i < repeatCount - 1) {
-        await new Promise((res) => setTimeout(res, 500));
-      }
-    }
-  } else if (audioType === 'cloned' && !useMultilingualAi && activeProfile?.playbackMode === 'direct_recording' && activeProfile.sampleAudioUrl) {
-    const repeatCount = Math.max(1, settings.repeatSpeechCount || 1);
-    for (let i = 0; i < repeatCount; i++) {
-      if (seqId !== activeBellSequenceId) return;
-      await playCustomAudio(activeProfile.sampleAudioUrl, speechVolume);
-      if (seqId !== activeBellSequenceId) return;
-      if (i < repeatCount - 1) {
-        await new Promise((res) => setTimeout(res, 500));
-      }
-    }
-  } else if (shouldGenerateAiAudio) {
-    if (!useMultilingualAi && settings.useCustomPrefixAudio && settings.customPrefixAudioUrl) {
-      await playCustomAudio(settings.customPrefixAudioUrl, speechVolume);
-      if (seqId !== activeBellSequenceId) return;
-      await new Promise((res) => setTimeout(res, 250));
-      if (seqId !== activeBellSequenceId) return;
-    }
-
-    const aiAudioUrl = prepared.aiAudioUrl;
-    let aiPlayed = false;
-
-    if (aiAudioUrl) {
-      const repeatCount = Math.max(1, settings.repeatSpeechCount || 1);
-      for (let i = 0; i < repeatCount; i++) {
-        if (seqId !== activeBellSequenceId) return;
-        const ok = await playCustomAudio(aiAudioUrl, speechVolume);
-        if (seqId !== activeBellSequenceId) return;
-        if (ok) aiPlayed = true;
-        if (i < repeatCount - 1) {
-          await new Promise((res) => setTimeout(res, 500));
-        }
-      }
-    }
-    if (!aiPlayed && resolvedSpokenText.trim().length > 0 && seqId === activeBellSequenceId) {
-      const fallbackVoiceId = audioType === 'tts' ? 'Fenrir' : targetVoiceId;
-      await speakTTS(resolvedSpokenText, settings, fallbackVoiceId, true, speechLanguage);
-    }
-  } else {
-    if (settings.useCustomPrefixAudio && settings.customPrefixAudioUrl) {
-      await playCustomAudio(settings.customPrefixAudioUrl, speechVolume);
-      if (seqId !== activeBellSequenceId) return;
-      await new Promise((res) => setTimeout(res, 250));
-      if (seqId !== activeBellSequenceId) return;
-    }
-
-    if (settings.enableTTS && resolvedSpokenText.trim().length > 0) {
-      const repeatCount = Math.max(1, settings.repeatSpeechCount || 1);
-      for (let i = 0; i < repeatCount; i++) {
-        if (seqId !== activeBellSequenceId) return;
-        await speakTTS(resolvedSpokenText, settings, 'Fenrir', false, speechLanguage);
-        if (seqId !== activeBellSequenceId) return;
-        if (i < repeatCount - 1) {
-          await new Promise((res) => setTimeout(res, 500));
-        }
-      }
-    }
-  }
-
-  if (seqId !== activeBellSequenceId) return;
-
-  // Step 3: Outro Chime
-  const isOutroExplicitlyRequested =
-    enableOutroChime === true &&
-    outroChimeType !== undefined &&
-    outroChimeType !== 'none';
-
-  if (isOutroExplicitlyRequested) {
-    const outroDelay = settings.outroChimeDelayMs ?? 400;
-    await new Promise((res) => setTimeout(res, Math.max(150, outroDelay)));
     if (seqId !== activeBellSequenceId) return;
 
-    let targetOutroType: ChimeType = 'classic_3tone';
-    let targetOutroCustomUrl = customOutroChimeUrl;
+    // Step 3: Outro Chime
+    const isOutroExplicitlyRequested =
+      enableOutroChime === true && outroChimeType !== undefined && outroChimeType !== 'none';
 
-    if (customOutroChimeUrl) {
-      targetOutroType = 'custom';
-      targetOutroCustomUrl = customOutroChimeUrl;
-    } else if (outroChimeType === 'same_as_intro') {
-      targetOutroType = actualChimeType;
-      targetOutroCustomUrl = customChimeUrl;
-    } else if (outroChimeType && outroChimeType !== 'none') {
-      targetOutroType = outroChimeType;
+    if (isOutroExplicitlyRequested) {
+      setBellPlaybackState({ phase: 'outro' });
+      const outroDelay = settings.outroChimeDelayMs ?? 400;
+      await delaySequence(Math.max(150, outroDelay), seqId);
+      if (seqId !== activeBellSequenceId) return;
+
+      let targetOutroType: ChimeType = 'classic_3tone';
+      let targetOutroCustomUrl = customOutroChimeUrl;
+
+      if (customOutroChimeUrl) {
+        targetOutroType = 'custom';
+        targetOutroCustomUrl = customOutroChimeUrl;
+      } else if (outroChimeType === 'same_as_intro') {
+        targetOutroType = actualChimeType;
+        targetOutroCustomUrl = customChimeUrl;
+      } else if (outroChimeType && outroChimeType !== 'none') {
+        targetOutroType = outroChimeType;
+      }
+
+      if (targetOutroType && targetOutroType !== 'none') {
+        await playChimeTone(
+          targetOutroType,
+          combinedVolume,
+          settings.customChimes,
+          targetOutroCustomUrl
+        );
+        await waitIfPaused(seqId);
+      }
     }
 
-    if (targetOutroType && targetOutroType !== 'none') {
-      await playChimeTone(
-        targetOutroType,
-        combinedVolume,
-        settings.customChimes,
-        targetOutroCustomUrl
-      );
+    if (seqId !== activeBellSequenceId) return;
+
+    // Step 4: Scheduled Post-Bell Recording (Rekaman Tambahan Otomatis Setelah Bel)
+    if (!options?.skipPostBellTracks && settings.postBellTracks && settings.postBellTracks.length > 0) {
+      const matchingTracks = settings.postBellTracks.filter((track) => {
+        if (!track.enabled || !track.audioUrl) return false;
+        if (track.scheduleId === 'all') return true;
+        if (options?.scheduleId && track.scheduleId === options.scheduleId) return true;
+        if (options?.scheduleTime && track.scheduleTime === options.scheduleTime) return true;
+        return false;
+      });
+
+      for (const track of matchingTracks) {
+        if (seqId !== activeBellSequenceId) return;
+        setBellPlaybackState({
+          phase: 'post_bell',
+          postBellTrackId: track.id,
+          label: `${sequenceLabel} • ${track.name}`,
+        });
+        await delaySequence(450, seqId);
+        if (seqId !== activeBellSequenceId) return;
+
+        const trackVol = Math.max(0, Math.min(1, (track.volume ?? 1.0) * itemVolume));
+        await playCustomAudio(track.audioUrl, trackVol);
+        await waitIfPaused(seqId);
+      }
+    }
+  } finally {
+    if (seqId === activeBellSequenceId) {
+      setBellPlaybackState({
+        isPlaying: false,
+        isPaused: false,
+        label: null,
+        scheduleId: null,
+        postBellTrackId: null,
+        phase: 'idle',
+      });
     }
   }
 }
