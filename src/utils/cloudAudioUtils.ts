@@ -54,17 +54,26 @@ export async function uploadAudioToCloudinary(
   fileOrBlob: File | Blob,
   fileName: string,
   cloudName: string,
-  uploadPreset: string = 'bel_sekolah'
+  uploadPreset?: string
 ): Promise<{ url: string; fileName: string }> {
+  const cleanCloudName = (cloudName || '').trim();
+  const cleanPreset = (uploadPreset || '').trim() || 'bel_sekolah';
+  if (!cleanCloudName) {
+    throw new Error('Cloudinary Cloud Name belum diisi.');
+  }
+
   const formData = new FormData();
   formData.append('file', fileOrBlob, fileName);
-  formData.append('upload_preset', uploadPreset);
+  formData.append('upload_preset', cleanPreset);
   formData.append('resource_type', 'auto');
 
-  const response = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/auto/upload`, {
-    method: 'POST',
-    body: formData,
-  });
+  const response = await fetch(
+    `https://api.cloudinary.com/v1_1/${encodeURIComponent(cleanCloudName)}/auto/upload`,
+    {
+      method: 'POST',
+      body: formData,
+    }
+  );
 
   if (!response.ok) {
     const errData = await response.json().catch(() => ({}));
@@ -72,8 +81,13 @@ export async function uploadAudioToCloudinary(
   }
 
   const data = await response.json();
+  const resolvedUrl = data?.secure_url || data?.url;
+  if (!resolvedUrl || typeof resolvedUrl !== 'string') {
+    throw new Error('Cloudinary tidak mengembalikan URL audio yang valid.');
+  }
+
   return {
-    url: data.secure_url || data.url,
+    url: resolvedUrl,
     fileName: fileName,
   };
 }

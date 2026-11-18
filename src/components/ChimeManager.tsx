@@ -42,9 +42,15 @@ import {
   AUDIO_FILE_ACCEPT,
   processAudioFile,
   getAudioFormatLabel,
+  isAudioFile,
 } from '../utils/audioFileUtils';
 import { normalizeAudioCloudUrl, isCloudAudioUrl, uploadAudioToCloudinary } from '../utils/cloudAudioUtils';
-import { saveAudioBlobToIDB, deleteAudioBlobFromIDB, IDB_AUDIO_PREFIX } from '../utils/audioBlobStore';
+import {
+  saveAudioBlobToIDB,
+  getAudioBlobFromIDB,
+  deleteAudioBlobFromIDB,
+  IDB_AUDIO_PREFIX,
+} from '../utils/audioBlobStore';
 import { AudioTrimmerModal } from './AudioTrimmerModal';
 
 interface ChimeManagerProps {
@@ -256,14 +262,26 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
 
+    if (!isAudioFile(file)) {
+      setPostBellUploadError(
+        'Format file tidak dikenali sebagai audio. Gunakan MP3, WAV, M4A, AAC, OGG, atau rekaman HP.'
+      );
+      e.target.value = '';
+      return;
+    }
+
     setIsUploadingPostBell(true);
     try {
-      const cleanDefaultName = file.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ');
-      if (!postBellName) {
-        setPostBellName(cleanDefaultName.charAt(0).toUpperCase() + cleanDefaultName.slice(1));
+      const cleanDefaultName = file.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ').trim();
+      if (!postBellName.trim()) {
+        setPostBellName(
+          cleanDefaultName
+            ? cleanDefaultName.charAt(0).toUpperCase() + cleanDefaultName.slice(1)
+            : 'Rekaman Setelah Bel'
+        );
       }
 
-      if (settings.cloudinaryCloudName) {
+      if (settings.cloudinaryCloudName?.trim()) {
         try {
           const uploaded = await uploadAudioToCloudinary(
             file,
@@ -273,34 +291,20 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
           );
           setPostBellAudioName(uploaded.fileName);
           setPostBellAudioUrl(uploaded.url);
+          const dur = await probeDurationSec(file);
+          if (dur) setPostBellDuration(dur);
           return;
-        } catch (cloudErr) {
+        } catch (cloudErr: any) {
           console.warn('Cloudinary upload fallback to local IndexedDB for post-bell audio:', cloudErr);
+          setPostBellUploadError(
+            `Upload ke Cloudinary gagal (${cloudErr?.message || 'periksa Cloud Name / Unsigned Preset'}). Rekaman tetap disimpan secara lokal.`
+          );
         }
       }
 
-      // Extract duration cleanly using HTMLAudio metadata
-      try {
-        const objUrl = URL.createObjectURL(file);
-        const probeAudio = new Audio(objUrl);
-        await new Promise<void>((resolve) => {
-          probeAudio.onloadedmetadata = () => {
-            if (isFinite(probeAudio.duration) && probeAudio.duration > 0) {
-              setPostBellDuration(Math.round(probeAudio.duration));
-            }
-            URL.revokeObjectURL(objUrl);
-            resolve();
-          };
-          probeAudio.onerror = () => {
-            URL.revokeObjectURL(objUrl);
-            resolve();
-          };
-          setTimeout(() => {
-            URL.revokeObjectURL(objUrl);
-            resolve();
-          }, 2500);
-        });
-      } catch {}
+      // Extract duration cleanly
+      const dur = await probeDurationSec(file);
+      if (dur) setPostBellDuration(dur);
 
       // Files <= 900KB can stay inline dataUrl, larger files (e.g. 8-minute recordings) go straight to IndexedDB
       if (file.size <= 900 * 1024) {
@@ -324,10 +328,16 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
 
   const handleSavePostBellTrack = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!postBellAudioUrl || !postBellName.trim()) {
-      alert('Mohon masukkan judul rekaman dan pilih file/link audio.');
+    setPostBellUploadError(null);
+    if (!postBellAudioUrl) {
+      setPostBellUploadError('Mohon pilih file audio atau masukkan Link Cloud terlebih dahulu.');
       return;
     }
+
+    const resolvedName =
+      postBellName.trim() ||
+      postBellAudioName.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ').trim() ||
+      'Rekaman Setelah Bel';
 
     let resolvedScheduleId: string | undefined = undefined;
     let resolvedScheduleTime: string | undefined = undefined;
@@ -344,7 +354,7 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
 
     const newTrack: PostBellTrack = {
       id: `postbell_${Date.now()}`,
-      name: postBellName.trim(),
+      name: resolvedName,
       audioUrl: postBellAudioUrl,
       audioName: postBellAudioName || 'Rekaman Tambahan',
       scheduleId: resolvedScheduleId,
@@ -403,15 +413,63 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
   // Handle File Upload (Supports AAC, M4A, 3GP, AMR, MP3, WAV, OGG, etc.)
   const [isProcessingUpload, setIsProcessingUpload] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [cloudinaryWarning, setCloudinaryWarning] = useState<string | null>(null);
+
+  const probeDurationSec = async (source: File | Blob | string): Promise<number | undefined> => {
+    let createdObjUrl: string | null = null;
+    try {
+      const targetUrl =
+        typeof source === 'string' ? source : (createdObjUrl = URL.createObjectURL(source));
+      const audio = new Audio(targetUrl);
+      return await new Promise<number | undefined>((resolve) => {
+        const done = (val?: number) => {
+          if (createdObjUrl) URL.revokeObjectURL(createdObjUrl);
+          resolve(val);
+        };
+        const timer = setTimeout(() => done(undefined), 2000);
+        audio.onloadedmetadata = () => {
+          clearTimeout(timer);
+          done(isFinite(audio.duration) && audio.duration > 0 ? Math.round(audio.duration) : undefined);
+        };
+        audio.onerror = () => {
+          clearTimeout(timer);
+          done(undefined);
+        };
+      });
+    } catch {
+      if (createdObjUrl) URL.revokeObjectURL(createdObjUrl);
+      return undefined;
+    }
+  };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     setUploadError(null);
+    setCloudinaryWarning(null);
     const file = e.target.files?.[0];
     if (!file) return;
 
+    if (!isAudioFile(file)) {
+      setUploadError(
+        'Format file tidak dikenali sebagai audio. Gunakan rekaman HP (.aac, .m4a, .3gp, .amr), MP3, WAV, atau OGG.'
+      );
+      e.target.value = '';
+      return;
+    }
+
+    if (file.size > 25 * 1024 * 1024) {
+      setUploadError(
+        `Ukuran file terlalu besar (${(file.size / (1024 * 1024)).toFixed(1)} MB). Maksimal ukuran adalah 25 MB.`
+      );
+      e.target.value = '';
+      return;
+    }
+
     setIsProcessingUpload(true);
     try {
-      if (settings.cloudinaryCloudName) {
+      const cleanName = file.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ').trim();
+      const autoTitle = cleanName ? cleanName.charAt(0).toUpperCase() + cleanName.slice(1) : 'Nada Dering Kustom';
+
+      if (settings.cloudinaryCloudName?.trim()) {
         try {
           const uploaded = await uploadAudioToCloudinary(
             file,
@@ -421,27 +479,38 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
           );
           setAudioFileName(uploaded.fileName);
           setAudioDataUrl(uploaded.url);
-          if (!chimeName) {
-            const cleanName = file.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ');
-            setChimeName(cleanName.charAt(0).toUpperCase() + cleanName.slice(1));
+          const dur = await probeDurationSec(file);
+          if (dur) setAudioDuration(dur);
+          if (!chimeName.trim()) {
+            setChimeName(autoTitle);
           }
           return;
         } catch (cloudErr: any) {
           console.warn('Cloudinary upload fallback to local storage:', cloudErr);
+          setCloudinaryWarning(
+            `Upload ke Cloudinary gagal (${cloudErr?.message || 'periksa Cloud Name / Unsigned Preset'}). Audio tetap dimuat secara lokal di perangkat ini.`
+          );
         }
       }
 
-      const processed = await processAudioFile(file, 25 * 1024 * 1024);
-      setAudioFileName(processed.fileName);
-      setAudioDataUrl(processed.dataUrl);
-      if (processed.duration) {
-        setAudioDuration(processed.duration);
+      if (file.size <= 900 * 1024) {
+        const processed = await processAudioFile(file, 25 * 1024 * 1024);
+        setAudioFileName(processed.fileName);
+        setAudioDataUrl(processed.dataUrl);
+        if (processed.duration) {
+          setAudioDuration(processed.duration);
+        }
+      } else {
+        // Store large audio files (> 900KB) cleanly in IndexedDB to prevent localStorage QuotaExceededError
+        const dur = await probeDurationSec(file);
+        const idbRef = await saveAudioBlobToIDB(`chime_${Date.now()}`, file);
+        setAudioFileName(file.name);
+        setAudioDataUrl(idbRef);
+        if (dur) setAudioDuration(dur);
       }
 
-      if (!chimeName) {
-        // Auto-populate name without extension
-        const cleanName = file.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ');
-        setChimeName(cleanName.charAt(0).toUpperCase() + cleanName.slice(1));
+      if (!chimeName.trim()) {
+        setChimeName(autoTitle);
       }
     } catch (err: any) {
       console.error('File upload error:', err);
@@ -454,6 +523,8 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
 
   // Microphone Recording
   const startRecording = async () => {
+    setUploadError(null);
+    setCloudinaryWarning(null);
     try {
       audioChunksRef.current = [];
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -479,8 +550,11 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
 
         const ext = actualMime.includes('mp4') ? 'm4a' : actualMime.includes('ogg') ? 'ogg' : 'webm';
         const generatedName = `Rekaman_Nada_${new Date().toISOString().slice(11, 19).replace(/:/g, '')}.${ext}`;
+        if (!chimeName.trim()) {
+          setChimeName('Rekaman Nada Bel');
+        }
 
-        if (settings.cloudinaryCloudName) {
+        if (settings.cloudinaryCloudName?.trim()) {
           setIsProcessingUpload(true);
           try {
             const uploaded = await uploadAudioToCloudinary(
@@ -493,10 +567,26 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
             setAudioFileName(generatedName);
             setAudioDuration(recordingSeconds);
             return;
-          } catch (cloudErr) {
+          } catch (cloudErr: any) {
             console.warn('Cloudinary upload fallback to local for recorded chime:', cloudErr);
+            setCloudinaryWarning(
+              `Upload ke Cloudinary gagal (${cloudErr?.message || 'periksa preset Unsigned'}). Rekaman tetap disimpan secara lokal.`
+            );
           } finally {
             setIsProcessingUpload(false);
+          }
+        }
+
+        if (audioBlob.size > 900 * 1024) {
+          try {
+            const idbRef = await saveAudioBlobToIDB(`chime_rec_${Date.now()}`, audioBlob);
+            setAudioDataUrl(idbRef);
+            setAudioFileName(generatedName);
+            setAudioDuration(recordingSeconds);
+            return;
+          } catch (idbErr: any) {
+            setUploadError(idbErr?.message || 'Gagal menyimpan hasil rekaman.');
+            return;
           }
         }
 
@@ -519,7 +609,7 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
       }, 1000);
     } catch (err) {
       console.error('Microphone error:', err);
-      alert('Tidak dapat mengakses mikrofon. Pastikan izin mikrofon telah diberikan di peramban Anda.');
+      setUploadError('Tidak dapat mengakses mikrofon. Pastikan izin mikrofon telah diberikan di peramban Anda.');
     }
   };
 
@@ -537,14 +627,20 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
   // Save New Custom Chime
   const handleSaveCustomChime = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!audioDataUrl || !chimeName.trim()) {
-      alert('Mohon masukkan nama nada dering dan sediakan audio rekaman/unggah.');
+    setUploadError(null);
+    if (!audioDataUrl) {
+      setUploadError('Mohon pilih file audio, rekam suara, atau tempel Link Cloud terlebih dahulu.');
       return;
     }
 
+    const resolvedName =
+      chimeName.trim() ||
+      audioFileName.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ').trim() ||
+      'Nada Dering Kustom';
+
     const newChime: CustomChime = {
       id: `custom_${Date.now()}`,
-      name: chimeName.trim(),
+      name: resolvedName,
       description: chimeDesc.trim() || undefined,
       audioUrl: audioDataUrl,
       audioName: audioFileName || 'Custom Nada Dering',
@@ -570,6 +666,9 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
     setAudioDataUrl(null);
     setAudioFileName('');
     setAudioDuration(undefined);
+    setCloudUrlInput('');
+    setCloudinaryWarning(null);
+    setUploadError(null);
     setRecordingSeconds(0);
   };
 
@@ -594,6 +693,11 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
   const handleDeleteCustomChime = (id: string) => {
     if (!confirm('Apakah Anda yakin ingin menghapus nada dering kustom ini?')) return;
 
+    const target = customChimes.find((c) => c.id === id);
+    if (target?.audioUrl) {
+      deleteAudioBlobFromIDB(target.audioUrl);
+    }
+
     const updated = customChimes.filter((c) => c.id !== id);
     const newDefault = defaultChimeId === id ? updated[0]?.id || 'westminster' : defaultChimeId;
 
@@ -606,10 +710,28 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
   };
 
   // Download Audio File
-  const handleDownloadAudio = (chime: CustomChime) => {
+  const handleDownloadAudio = async (chime: CustomChime) => {
+    const fileName = chime.audioName || `${chime.name.replace(/\s+/g, '_')}.mp3`;
+    if (chime.audioUrl.startsWith(IDB_AUDIO_PREFIX)) {
+      try {
+        const blob = await getAudioBlobFromIDB(chime.audioUrl);
+        if (!blob) return;
+        const objUrl = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = objUrl;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(objUrl), 2000);
+      } catch (err) {
+        console.error('Download IDB audio error:', err);
+      }
+      return;
+    }
     const a = document.createElement('a');
     a.href = chime.audioUrl;
-    a.download = chime.audioName || `${chime.name.replace(/\s+/g, '_')}.mp3`;
+    a.download = fileName;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -1625,15 +1747,21 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
 
                   <div className="space-y-2">
                     <input
-                      type="url"
+                      type="text"
+                      inputMode="url"
                       placeholder="https://drive.google.com/... atau https://.../nada-bel.mp3"
                       value={cloudUrlInput}
                       onChange={(e) => {
                         const val = e.target.value;
                         setCloudUrlInput(val);
                         const norm = normalizeAudioCloudUrl(val);
-                        setAudioDataUrl(norm);
-                        setAudioFileName(val.split('/').pop()?.split('?')[0] || 'Nada_Cloud_Online.mp3');
+                        setAudioDataUrl(norm || null);
+                        const filePart = val.split('/').pop()?.split('?')[0] || 'Nada_Cloud_Online.mp3';
+                        setAudioFileName(filePart);
+                        if (norm && !chimeName.trim()) {
+                          const cleanTitle = filePart.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ').trim();
+                          setChimeName(cleanTitle && cleanTitle !== 'view' && cleanTitle !== 'uc' ? cleanTitle : 'Nada Dering Cloud');
+                        }
                       }}
                       className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-400 font-mono"
                     />
@@ -1757,6 +1885,20 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
                 </div>
               )}
 
+              {cloudinaryWarning && (
+                <div className="bg-amber-500/10 border border-amber-500/30 text-amber-200 p-3 rounded-xl text-xs flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+                  <span>{cloudinaryWarning}</span>
+                </div>
+              )}
+
+              {uploadError && activeTab !== 'upload' && (
+                <div className="bg-rose-500/10 border border-rose-500/30 text-rose-300 p-3 rounded-xl text-xs flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                  <span>{uploadError}</span>
+                </div>
+              )}
+
               {/* Name Field */}
               <div>
                 <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5">
@@ -1764,7 +1906,6 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
                 </label>
                 <input
                   type="text"
-                  required
                   value={chimeName}
                   onChange={(e) => setChimeName(e.target.value)}
                   placeholder="misal: Lagu Mars SD Qur'an / Jingle 4-Ketuk"
@@ -1815,11 +1956,11 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
                 </button>
                 <button
                   type="submit"
-                  disabled={!audioDataUrl || !chimeName.trim()}
+                  disabled={!audioDataUrl || isProcessingUpload}
                   className="bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black px-6 py-2.5 rounded-xl text-xs flex items-center gap-2 shadow-lg shadow-emerald-500/20 active:scale-95 transition-all cursor-pointer disabled:opacity-50"
                 >
                   <Music className="w-4 h-4" />
-                  <span>Simpan Nada Dering</span>
+                  <span>{isProcessingUpload ? 'Mengunggah...' : 'Simpan Nada Dering'}</span>
                 </button>
               </div>
             </form>
@@ -1915,14 +2056,21 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
                     Tautan File Audio Online (Google Drive / Cloudinary / URL):
                   </label>
                   <input
-                    type="url"
+                    type="text"
+                    inputMode="url"
                     placeholder="https://drive.google.com/... atau https://.../rekaman-pulang.mp3"
                     value={postBellCloudUrlInput}
                     onChange={(e) => {
                       const val = e.target.value;
                       setPostBellCloudUrlInput(val);
-                      setPostBellAudioUrl(normalizeAudioCloudUrl(val));
-                      setPostBellAudioName(val.split('/').pop()?.split('?')[0] || 'Rekaman_Cloud.mp3');
+                      const norm = normalizeAudioCloudUrl(val);
+                      setPostBellAudioUrl(norm || null);
+                      const filePart = val.split('/').pop()?.split('?')[0] || 'Rekaman_Cloud.mp3';
+                      setPostBellAudioName(filePart);
+                      if (norm && !postBellName.trim()) {
+                        const cleanTitle = filePart.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ').trim();
+                        setPostBellName(cleanTitle && cleanTitle !== 'view' && cleanTitle !== 'uc' ? cleanTitle : 'Rekaman Cloud');
+                      }
                     }}
                     className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white placeholder-slate-500 font-mono focus:outline-none focus:border-blue-400"
                   />
@@ -1973,7 +2121,6 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
                 </label>
                 <input
                   type="text"
-                  required
                   value={postBellName}
                   onChange={(e) => setPostBellName(e.target.value)}
                   placeholder="misal: Nasehat / Musik Pulang 8 Menit (13:45)"
@@ -2046,11 +2193,11 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
                 </button>
                 <button
                   type="submit"
-                  disabled={!postBellAudioUrl || !postBellName.trim() || isUploadingPostBell}
+                  disabled={!postBellAudioUrl || isUploadingPostBell}
                   className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-black px-6 py-2.5 rounded-xl text-xs flex items-center gap-2 cursor-pointer disabled:opacity-50"
                 >
                   <CheckCircle2 className="w-4 h-4" />
-                  <span>Simpan Rekaman Setelah Bel</span>
+                  <span>{isUploadingPostBell ? 'Mengunggah...' : 'Simpan Rekaman Setelah Bel'}</span>
                 </button>
               </div>
             </form>
@@ -2073,11 +2220,15 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
           cloudinaryUploadPreset={settings.cloudinaryUploadPreset}
           onApplyTrim={async (res) => {
             if (trimmerTarget.mode === 'draft') {
-              setAudioDataUrl(res.audioUrl);
+              let storedUrl = res.audioUrl;
+              if (storedUrl.startsWith('data:') && storedUrl.length > 900 * 1024) {
+                storedUrl = await saveAudioBlobToIDB(`chime_trim_${Date.now()}`, storedUrl);
+              }
+              setAudioDataUrl(storedUrl);
               setAudioFileName(res.fileName);
               setAudioDuration(res.durationSec);
-              if (res.audioUrl.startsWith('http')) {
-                setCloudUrlInput(res.audioUrl);
+              if (storedUrl.startsWith('http')) {
+                setCloudUrlInput(storedUrl);
               }
             } else if (trimmerTarget.mode === 'post_bell_draft') {
               let storedUrl = res.audioUrl;
@@ -2122,12 +2273,16 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
               }
             } else if (trimmerTarget.mode === 'existing' && trimmerTarget.chime) {
               const targetChime = trimmerTarget.chime;
+              let storedUrl = res.audioUrl;
+              if (storedUrl.startsWith('data:') && storedUrl.length > 900 * 1024) {
+                storedUrl = await saveAudioBlobToIDB(`chime_trim_${Date.now()}`, storedUrl);
+              }
               if (res.saveMode === 'replace') {
                 const updated = customChimes.map((c) =>
                   c.id === targetChime.id
                     ? {
                         ...c,
-                        audioUrl: res.audioUrl,
+                        audioUrl: storedUrl,
                         audioName: res.fileName,
                         durationSec: res.durationSec,
                       }
@@ -2142,7 +2297,7 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
                   id: `custom_${Date.now()}`,
                   name: `${targetChime.name} (Potongan)`,
                   description: targetChime.description,
-                  audioUrl: res.audioUrl,
+                  audioUrl: storedUrl,
                   audioName: res.fileName,
                   category: targetChime.category,
                   durationSec: res.durationSec,

@@ -33,6 +33,9 @@ function sanitizeOptionalString(val: unknown, maxLen: number): string | undefine
 
 function sanitizeAudioUrlForCloud(url: unknown): string | undefined {
   if (typeof url !== 'string' || !url.trim()) return undefined;
+  if (url.startsWith('idb-audio://')) {
+    return undefined;
+  }
   if (url.length > MAX_INLINE_AUDIO_LEN) {
     // Skip oversized local base64 blobs so Firestore 1MB doc limits are never breached
     return undefined;
@@ -73,10 +76,7 @@ export function sanitizeAudioSettingsForCloud(settings: AudioSettings): AudioSet
   const postBellTracks = (settings.postBellTracks || []).map((t) =>
     stripUndefinedDeep({
       ...t,
-      audioUrl:
-        t.audioUrl && t.audioUrl.startsWith('idb-audio://')
-          ? ''
-          : sanitizeAudioUrlForCloud(t.audioUrl) || '',
+      audioUrl: sanitizeAudioUrlForCloud(t.audioUrl) || '',
     })
   ).filter((t) => t.audioUrl);
 

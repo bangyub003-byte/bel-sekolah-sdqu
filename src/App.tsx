@@ -463,6 +463,25 @@ export default function App() {
           const localOnlyPostBell = (currentLocal.postBellTracks || []).filter(
             (t) => !cloudPostIds.has(t.id) && (t.audioUrl.startsWith('idb-audio://') || t.audioUrl.length > 240000)
           );
+
+          const cloudChimes = schoolData.audioSettings.customChimes || [];
+          const cloudChimeIds = new Set(cloudChimes.map((c) => c.id));
+          const localOnlyChimes = (currentLocal.customChimes || []).filter(
+            (c) => !cloudChimeIds.has(c.id) && (c.audioUrl.startsWith('idb-audio://') || c.audioUrl.length > 240000)
+          );
+
+          const localProfileMap = new Map<
+            string,
+            NonNullable<AudioSettings['clonedProfiles']>[number]
+          >((currentLocal.clonedProfiles || []).map((p) => [p.id, p]));
+          const mergedProfiles = (schoolData.audioSettings.clonedProfiles || []).map((cp) => {
+            const lp = localProfileMap.get(cp.id);
+            return {
+              ...cp,
+              sampleAudioUrl: cp.sampleAudioUrl || lp?.sampleAudioUrl,
+            };
+          });
+
           const mergedSettings: AudioSettings = {
             ...currentLocal,
             ...schoolData.audioSettings,
@@ -470,6 +489,9 @@ export default function App() {
               schoolData.audioSettings.customPrefixAudioUrl || currentLocal.customPrefixAudioUrl,
             globalOutroChimeUrl:
               schoolData.audioSettings.globalOutroChimeUrl || currentLocal.globalOutroChimeUrl,
+            clonedProfiles:
+              mergedProfiles.length > 0 ? mergedProfiles : currentLocal.clonedProfiles,
+            customChimes: [...cloudChimes, ...localOnlyChimes],
             postBellTracks: [...cloudPostBell, ...localOnlyPostBell],
           };
           const serialized = JSON.stringify(mergedSettings);
