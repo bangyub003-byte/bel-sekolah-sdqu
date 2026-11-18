@@ -138,13 +138,10 @@ export const LiveClockCard: React.FC<LiveClockCardProps> = ({
               </span>
             </div>
 
-            {/* Date and Location Badge */}
+            {/* Date and Quick Repeat / Playback Controls */}
             <div className="flex flex-wrap items-center justify-center gap-2 mt-2 sm:mt-3 text-slate-600 text-xs sm:text-sm font-bold">
               <Calendar className="w-4 h-4 text-blue-600" />
               <span>{formattedDate}</span>
-              <span className="text-[11px] bg-slate-100 text-slate-700 px-2 py-0.5 rounded-lg border border-slate-200 font-mono">
-                SD QUR'AN UNGGULAN
-              </span>
               {latestScheduleItem && onTriggerScheduleBell && (
                 <button
                   type="button"
@@ -163,7 +160,7 @@ export const LiveClockCard: React.FC<LiveClockCardProps> = ({
                       type="button"
                       onClick={onTogglePauseBell}
                       title={bellPlayback.isPaused ? 'Lanjutkan suara bel' : 'Jeda (Pause) suara bel'}
-                      className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-800 hover:text-white bg-amber-100 hover:bg-amber-500 px-2 py-0.5 rounded-lg border border-amber-300 transition-all cursor-pointer shadow-2xs active:scale-95"
+                      className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-700 hover:text-white bg-amber-50 hover:bg-amber-500 px-2 py-0.5 rounded-lg border border-amber-200 hover:border-amber-500 transition-all cursor-pointer shadow-2xs active:scale-95"
                     >
                       {bellPlayback.isPaused ? (
                         <>

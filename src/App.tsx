@@ -1444,9 +1444,6 @@ export default function App() {
         onCloudLogin={handleCloudLogin}
         onCloudLogout={handleCloudLogout}
         onForcePushCloud={handleForcePushCloud}
-        bellPlayback={bellPlayback}
-        onTogglePauseBell={togglePauseBellPlayback}
-        onStopBell={stopAllBellAudio}
       />
 
       {/* Main Container */}

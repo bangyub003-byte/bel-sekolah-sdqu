@@ -399,13 +399,24 @@ export const ScheduleList: React.FC<ScheduleListProps> = ({
 
                 {/* Right: Actions */}
                 <div className="flex flex-wrap items-center gap-2 w-full md:w-auto justify-end pt-2 md:pt-0 border-t md:border-0 border-slate-100">
-                  {bellPlayback?.isPlaying && bellPlayback.scheduleId === item.id ? (
+                  {/* Test Play Sound */}
+                  <button
+                    onClick={() => onTestScheduleItem(item)}
+                    className="bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all active:scale-95 cursor-pointer"
+                    title="Uji Bunyi Nada & Speech Ucapan"
+                  >
+                    <Play className="w-3.5 h-3.5 fill-current" />
+                    <span>Tes Bunyi</span>
+                  </button>
+
+                  {/* Neat Pause & Stop Controls beside Tes Bunyi when this schedule is playing */}
+                  {bellPlayback?.isPlaying && bellPlayback.scheduleId === item.id && (
                     <>
                       {onTogglePauseBell && (
                         <button
                           type="button"
                           onClick={onTogglePauseBell}
-                          className="bg-amber-500 hover:bg-amber-600 text-white px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all active:scale-95 cursor-pointer"
+                          className="bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all active:scale-95 cursor-pointer"
                           title={bellPlayback.isPaused ? 'Lanjutkan suara bel' : 'Jeda (Pause) suara bel'}
                         >
                           {bellPlayback.isPaused ? (
@@ -425,7 +436,7 @@ export const ScheduleList: React.FC<ScheduleListProps> = ({
                         <button
                           type="button"
                           onClick={onStopBell}
-                          className="bg-rose-600 hover:bg-rose-700 text-white px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all active:scale-95 cursor-pointer"
+                          className="bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all active:scale-95 cursor-pointer"
                           title="Hentikan suara bel sekarang"
                         >
                           <Square className="w-3.5 h-3.5 fill-current" />
@@ -433,16 +444,6 @@ export const ScheduleList: React.FC<ScheduleListProps> = ({
                         </button>
                       )}
                     </>
-                  ) : (
-                    /* Test Play Sound */
-                    <button
-                      onClick={() => onTestScheduleItem(item)}
-                      className="bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all active:scale-95 cursor-pointer"
-                      title="Uji Bunyi Nada & Speech Ucapan"
-                    >
-                      <Play className="w-3.5 h-3.5 fill-current" />
-                      <span>Tes Bunyi</span>
-                    </button>
                   )}
 
                   {/* Toggle Active */}

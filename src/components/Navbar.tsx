@@ -17,12 +17,8 @@ import {
   CloudUpload,
   LogIn,
   LogOut,
-  Pause,
-  Square,
-  Play,
 } from 'lucide-react';
 import { TimeSyncInfo } from '../types';
-import { BellPlaybackState } from '../utils/audioSynth';
 
 interface NavbarProps {
   activeTab: string;
@@ -36,9 +32,6 @@ interface NavbarProps {
   onCloudLogin?: () => void;
   onCloudLogout?: () => void;
   onForcePushCloud?: () => void;
-  bellPlayback?: BellPlaybackState;
-  onTogglePauseBell?: () => void;
-  onStopBell?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -53,9 +46,6 @@ export const Navbar: React.FC<NavbarProps> = ({
   onCloudLogin,
   onCloudLogout,
   onForcePushCloud,
-  bellPlayback,
-  onTogglePauseBell,
-  onStopBell,
 }) => {
   const [isMenuCollapsed, setIsMenuCollapsed] = useState(false);
 
@@ -178,42 +168,6 @@ export const Navbar: React.FC<NavbarProps> = ({
 
         {/* Buttons: Quick Test Bell & Toggle Menu */}
         <div className="flex flex-wrap items-center gap-2 w-full md:w-auto justify-end">
-          {bellPlayback?.isPlaying && (
-            <div className="flex items-center gap-1.5 bg-amber-50 border border-amber-200 px-2 py-1 rounded-xl shadow-xs">
-              {onTogglePauseBell && (
-                <button
-                  type="button"
-                  onClick={onTogglePauseBell}
-                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-amber-500 hover:bg-amber-600 text-white transition cursor-pointer active:scale-95"
-                  title={bellPlayback.isPaused ? 'Lanjutkan suara bel' : 'Jeda (Pause) suara bel'}
-                >
-                  {bellPlayback.isPaused ? (
-                    <>
-                      <Play className="w-3.5 h-3.5 fill-current" />
-                      <span>Lanjut</span>
-                    </>
-                  ) : (
-                    <>
-                      <Pause className="w-3.5 h-3.5 fill-current" />
-                      <span>Pause</span>
-                    </>
-                  )}
-                </button>
-              )}
-              {onStopBell && (
-                <button
-                  type="button"
-                  onClick={onStopBell}
-                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white transition cursor-pointer active:scale-95"
-                  title="Hentikan paksa suara bel sekarang"
-                >
-                  <Square className="w-3 h-3 fill-current" />
-                  <span>Stop Bel</span>
-                </button>
-              )}
-            </div>
-          )}
-
           <button
             onClick={() => setIsMenuCollapsed(!isMenuCollapsed)}
             className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 transition cursor-pointer"
