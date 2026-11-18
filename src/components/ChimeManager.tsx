@@ -306,8 +306,8 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
       const dur = await probeDurationSec(file);
       if (dur) setPostBellDuration(dur);
 
-      // Files <= 900KB can stay inline dataUrl, larger files (e.g. 8-minute recordings) go straight to IndexedDB
-      if (file.size <= 900 * 1024) {
+      // Files <= 150KB can stay inline dataUrl, larger files go straight to IndexedDB
+      if (file.size <= 150 * 1024) {
         const processed = await processAudioFile(file, 2 * 1024 * 1024);
         setPostBellAudioName(processed.fileName);
         setPostBellAudioUrl(processed.dataUrl);
@@ -488,12 +488,12 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
         } catch (cloudErr: any) {
           console.warn('Cloudinary upload fallback to local storage:', cloudErr);
           setCloudinaryWarning(
-            `Upload ke Cloudinary gagal (${cloudErr?.message || 'periksa Cloud Name / Unsigned Preset'}). Audio tetap dimuat secara lokal di perangkat ini.`
+            `Upload ke Cloudinary gagal (${cloudErr?.message || 'periksa Cloud Name / Unsigned Preset'}). Audio tetap siap disimpan lokal di perangkat ini.`
           );
         }
       }
 
-      if (file.size <= 900 * 1024) {
+      if (file.size <= 150 * 1024) {
         const processed = await processAudioFile(file, 25 * 1024 * 1024);
         setAudioFileName(processed.fileName);
         setAudioDataUrl(processed.dataUrl);
@@ -501,7 +501,7 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
           setAudioDuration(processed.duration);
         }
       } else {
-        // Store large audio files (> 900KB) cleanly in IndexedDB to prevent localStorage QuotaExceededError
+        // Store audio files > 150KB cleanly in IndexedDB so localStorage quota is never exceeded
         const dur = await probeDurationSec(file);
         const idbRef = await saveAudioBlobToIDB(`chime_${Date.now()}`, file);
         setAudioFileName(file.name);
@@ -570,14 +570,14 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
           } catch (cloudErr: any) {
             console.warn('Cloudinary upload fallback to local for recorded chime:', cloudErr);
             setCloudinaryWarning(
-              `Upload ke Cloudinary gagal (${cloudErr?.message || 'periksa preset Unsigned'}). Rekaman tetap disimpan secara lokal.`
+              `Upload ke Cloudinary gagal (${cloudErr?.message || 'periksa preset Unsigned'}). Rekaman tetap siap disimpan lokal di perangkat ini.`
             );
           } finally {
             setIsProcessingUpload(false);
           }
         }
 
-        if (audioBlob.size > 900 * 1024) {
+        if (audioBlob.size > 150 * 1024) {
           try {
             const idbRef = await saveAudioBlobToIDB(`chime_rec_${Date.now()}`, audioBlob);
             setAudioDataUrl(idbRef);
@@ -2221,7 +2221,7 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
           onApplyTrim={async (res) => {
             if (trimmerTarget.mode === 'draft') {
               let storedUrl = res.audioUrl;
-              if (storedUrl.startsWith('data:') && storedUrl.length > 900 * 1024) {
+              if (storedUrl.startsWith('data:') && storedUrl.length > 150 * 1024) {
                 storedUrl = await saveAudioBlobToIDB(`chime_trim_${Date.now()}`, storedUrl);
               }
               setAudioDataUrl(storedUrl);
@@ -2232,7 +2232,7 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
               }
             } else if (trimmerTarget.mode === 'post_bell_draft') {
               let storedUrl = res.audioUrl;
-              if (storedUrl.startsWith('data:') && storedUrl.length > 900 * 1024) {
+              if (storedUrl.startsWith('data:') && storedUrl.length > 150 * 1024) {
                 storedUrl = await saveAudioBlobToIDB(`postbell_${Date.now()}`, storedUrl);
               }
               setPostBellAudioUrl(storedUrl);
@@ -2244,7 +2244,7 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
             } else if (trimmerTarget.mode === 'post_bell_existing' && trimmerTarget.postBellTrack) {
               const targetTrack = trimmerTarget.postBellTrack;
               let storedUrl = res.audioUrl;
-              if (storedUrl.startsWith('data:') && storedUrl.length > 900 * 1024) {
+              if (storedUrl.startsWith('data:') && storedUrl.length > 150 * 1024) {
                 storedUrl = await saveAudioBlobToIDB(`postbell_${Date.now()}`, storedUrl);
               }
               if (res.saveMode === 'replace') {
@@ -2274,7 +2274,7 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
             } else if (trimmerTarget.mode === 'existing' && trimmerTarget.chime) {
               const targetChime = trimmerTarget.chime;
               let storedUrl = res.audioUrl;
-              if (storedUrl.startsWith('data:') && storedUrl.length > 900 * 1024) {
+              if (storedUrl.startsWith('data:') && storedUrl.length > 150 * 1024) {
                 storedUrl = await saveAudioBlobToIDB(`chime_trim_${Date.now()}`, storedUrl);
               }
               if (res.saveMode === 'replace') {
