@@ -23,6 +23,7 @@ import {
   Check,
   Smartphone,
   Globe,
+  Scissors,
 } from 'lucide-react';
 import { AudioSettings, CustomChime, BuiltinChimeType, ChimeType } from '../types';
 import { playChimeTone, playCustomAudio, playBellSequence } from '../utils/audioSynth';
@@ -33,6 +34,7 @@ import {
   getAudioFormatLabel,
 } from '../utils/audioFileUtils';
 import { normalizeAudioCloudUrl, isCloudAudioUrl, uploadAudioToCloudinary } from '../utils/cloudAudioUtils';
+import { AudioTrimmerModal } from './AudioTrimmerModal';
 
 interface ChimeManagerProps {
   settings: AudioSettings;
@@ -80,6 +82,15 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
   const customChimes = settings.customChimes || [];
   const defaultChimeId = settings.defaultChimeId;
   const useCustomDefaultChime = settings.useCustomDefaultChime ?? false;
+
+  // Audio Trimmer modal state (for both saved custom chimes and draft upload/record/url audio)
+  const [trimmerTarget, setTrimmerTarget] = useState<{
+    mode: 'draft' | 'existing';
+    chime?: CustomChime;
+    audioUrl: string;
+    title: string;
+    fileName: string;
+  } | null>(null);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -180,6 +191,22 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
         setPlayingId(null);
       }
     }
+  };
+
+  const openTrimmer = (target: {
+    mode: 'draft' | 'existing';
+    chime?: CustomChime;
+    audioUrl: string;
+    title: string;
+    fileName: string;
+  }) => {
+    if (stopPreviewFnRef.current) {
+      stopPreviewFnRef.current();
+      stopPreviewFnRef.current = null;
+    }
+    stopAllCustomAudio();
+    setPlayingId(null);
+    setTrimmerTarget(target);
   };
 
   // Handle File Upload (Supports AAC, M4A, 3GP, AMR, MP3, WAV, OGG, etc.)
@@ -678,6 +705,22 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
                     <div className="flex items-center gap-1 shrink-0">
                       <button
                         type="button"
+                        onClick={() =>
+                          openTrimmer({
+                            mode: 'existing',
+                            chime,
+                            audioUrl: chime.audioUrl,
+                            title: chime.name,
+                            fileName: chime.audioName || `${chime.name}.mp3`,
+                          })
+                        }
+                        className="text-slate-400 hover:text-emerald-300 p-1.5 rounded-lg hover:bg-emerald-950/40 transition-colors cursor-pointer"
+                        title="Potong / Cut Audio Nada Dering"
+                      >
+                        <Scissors className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => handleDownloadAudio(chime)}
                         className="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
                         title="Unduh File Audio"
@@ -1096,14 +1139,32 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
                         </div>
                       </div>
 
-                      <button
-                        type="button"
-                        onClick={() => handlePlayPreview('modal_preview', audioDataUrl, false)}
-                        className="bg-emerald-500 text-slate-950 px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 shrink-0 cursor-pointer"
-                      >
-                        <Play className="w-3.5 h-3.5 fill-current" />
-                        <span>Tes Putar</span>
-                      </button>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            openTrimmer({
+                              mode: 'draft',
+                              audioUrl: audioDataUrl,
+                              title: chimeName || audioFileName || 'Audio Unggahan',
+                              fileName: audioFileName || 'nada_dering.mp3',
+                            })
+                          }
+                          className="bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/30 px-2.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
+                          title="Potong / Cut durasi audio"
+                        >
+                          <Scissors className="w-3.5 h-3.5" />
+                          <span>Potong</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handlePlayPreview('modal_preview', audioDataUrl, false)}
+                          className="bg-emerald-500 text-slate-950 px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
+                        >
+                          <Play className="w-3.5 h-3.5 fill-current" />
+                          <span>Tes Putar</span>
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -1136,19 +1197,37 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
                     />
 
                     {audioDataUrl && (
-                      <div className="bg-blue-950/30 border border-blue-500/40 rounded-xl p-3 flex items-center justify-between">
+                      <div className="bg-blue-950/30 border border-blue-500/40 rounded-xl p-3 flex items-center justify-between gap-2">
                         <span className="text-xs text-blue-200 font-bold flex items-center gap-1.5">
                           <CheckCircle2 className="w-4 h-4 text-emerald-400" />
                           Link Siap Digunakan
                         </span>
-                        <button
-                          type="button"
-                          onClick={() => handlePlayPreview('modal_preview', audioDataUrl, false)}
-                          className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer transition shadow-xs"
-                        >
-                          <Play className="w-3.5 h-3.5 fill-current" />
-                          <span>Tes Putar Link</span>
-                        </button>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              openTrimmer({
+                                mode: 'draft',
+                                audioUrl: audioDataUrl,
+                                title: chimeName || audioFileName || 'Audio Link Cloud',
+                                fileName: audioFileName || 'nada_cloud.mp3',
+                              })
+                            }
+                            className="bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/30 px-2.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
+                            title="Potong / Cut audio dari link ini"
+                          >
+                            <Scissors className="w-3.5 h-3.5" />
+                            <span>Potong</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handlePlayPreview('modal_preview', audioDataUrl, false)}
+                            className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer transition shadow-xs"
+                          >
+                            <Play className="w-3.5 h-3.5 fill-current" />
+                            <span>Tes Putar Link</span>
+                          </button>
+                        </div>
                       </div>
                     )}
                   </div>
@@ -1201,18 +1280,36 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
                   </div>
 
                   {audioDataUrl && (
-                    <div className="pt-3 border-t border-slate-800 flex items-center justify-between">
+                    <div className="pt-3 border-t border-slate-800 flex items-center justify-between gap-2">
                       <span className="text-xs text-emerald-300 font-bold">
-                        Hasil Rekaman Tersedia ({recordingSeconds}s)
+                        Hasil Rekaman Tersedia ({audioDuration ?? recordingSeconds}s)
                       </span>
-                      <button
-                        type="button"
-                        onClick={() => handlePlayPreview('modal_preview', audioDataUrl, false)}
-                        className="bg-emerald-500 text-slate-950 px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
-                      >
-                        <Play className="w-3.5 h-3.5 fill-current" />
-                        <span>Putar Ulang</span>
-                      </button>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            openTrimmer({
+                              mode: 'draft',
+                              audioUrl: audioDataUrl,
+                              title: chimeName || 'Rekaman Nada Dering',
+                              fileName: audioFileName || 'rekaman_nada.webm',
+                            })
+                          }
+                          className="bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/30 px-2.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
+                          title="Potong / Cut hasil rekaman"
+                        >
+                          <Scissors className="w-3.5 h-3.5" />
+                          <span>Potong</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handlePlayPreview('modal_preview', audioDataUrl, false)}
+                          className="bg-emerald-500 text-slate-950 px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
+                        >
+                          <Play className="w-3.5 h-3.5 fill-current" />
+                          <span>Putar Ulang</span>
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -1286,6 +1383,64 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
             </form>
           </div>
         </div>
+      )}
+
+      {/* MODAL: Pemotong Audio Nada Dering */}
+      {trimmerTarget && (
+        <AudioTrimmerModal
+          isOpen={true}
+          onClose={() => setTrimmerTarget(null)}
+          audioUrl={trimmerTarget.audioUrl}
+          audioTitle={trimmerTarget.title}
+          fileName={trimmerTarget.fileName}
+          isExistingChime={trimmerTarget.mode === 'existing'}
+          cloudinaryCloudName={settings.cloudinaryCloudName}
+          cloudinaryUploadPreset={settings.cloudinaryUploadPreset}
+          onApplyTrim={(res) => {
+            if (trimmerTarget.mode === 'draft') {
+              setAudioDataUrl(res.audioUrl);
+              setAudioFileName(res.fileName);
+              setAudioDuration(res.durationSec);
+              if (res.audioUrl.startsWith('http')) {
+                setCloudUrlInput(res.audioUrl);
+              }
+            } else if (trimmerTarget.mode === 'existing' && trimmerTarget.chime) {
+              const targetChime = trimmerTarget.chime;
+              if (res.saveMode === 'replace') {
+                const updated = customChimes.map((c) =>
+                  c.id === targetChime.id
+                    ? {
+                        ...c,
+                        audioUrl: res.audioUrl,
+                        audioName: res.fileName,
+                        durationSec: res.durationSec,
+                      }
+                    : c
+                );
+                onUpdateSettings({
+                  ...settings,
+                  customChimes: updated,
+                });
+              } else {
+                const newChime: CustomChime = {
+                  id: `custom_${Date.now()}`,
+                  name: `${targetChime.name} (Potongan)`,
+                  description: targetChime.description,
+                  audioUrl: res.audioUrl,
+                  audioName: res.fileName,
+                  category: targetChime.category,
+                  durationSec: res.durationSec,
+                  createdAt: Date.now(),
+                };
+                onUpdateSettings({
+                  ...settings,
+                  customChimes: [newChime, ...customChimes],
+                });
+              }
+            }
+            setTrimmerTarget(null);
+          }}
+        />
       )}
     </div>
   );
