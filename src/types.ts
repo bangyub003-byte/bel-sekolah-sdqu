@@ -126,6 +126,8 @@ export interface AudioSettings {
   globalOutroChimeName?: string;
   outroChimeDelayMs?: number; // Delay between voice ending and outro chime
   postBellTracks?: PostBellTrack[]; // Scheduled post-bell recordings/music played automatically after bell
+  fridayExtraOff?: boolean; // true = Ekstrakurikuler Hari Jumat diliburkan (pulang lebih awal)
+  fridayEarlyDismissalTime?: string; // Jam pulang awal hari Jumat saat ekstra libur (default '12:30')
 }
 
 export interface TimeSyncInfo {

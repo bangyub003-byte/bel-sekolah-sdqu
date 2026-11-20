@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Clock,
   Calendar,
@@ -13,6 +13,8 @@ import {
   Pause,
   Play,
   Square,
+  Edit2,
+  X,
 } from 'lucide-react';
 import { DayOfWeek, TimeSyncInfo, ScheduleItem } from '../types';
 import { getIndonesianDayName } from '../utils/timeSync';
@@ -31,6 +33,11 @@ interface LiveClockCardProps {
   onTriggerScheduleBell?: (item: ScheduleItem) => void;
   disabledDays?: DayOfWeek[];
   onToggleDisabledDay?: (day: DayOfWeek) => void;
+  fridayExtraOff?: boolean;
+  fridayEarlyDismissalTime?: string;
+  onToggleFridayExtraOff?: () => void;
+  onUpdateFridayEarlyTime?: (time: string) => void;
+  onTriggerFridayEarlyDismissalNow?: () => void;
   bellPlayback?: BellPlaybackState;
   onTogglePauseBell?: () => void;
   onStopBell?: () => void;
@@ -49,10 +56,35 @@ export const LiveClockCard: React.FC<LiveClockCardProps> = ({
   onTriggerScheduleBell,
   disabledDays = [0],
   onToggleDisabledDay,
+  fridayExtraOff = false,
+  fridayEarlyDismissalTime = '12:30',
+  onToggleFridayExtraOff,
+  onUpdateFridayEarlyTime,
+  onTriggerFridayEarlyDismissalNow,
   bellPlayback,
   onTogglePauseBell,
   onStopBell,
 }) => {
+  const [isEditingFriday, setIsEditingFriday] = useState(false);
+  const fridayPopoverRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!isEditingFriday) return;
+    const handleOutside = (e: MouseEvent) => {
+      if (fridayPopoverRef.current && !fridayPopoverRef.current.contains(e.target as Node)) {
+        setIsEditingFriday(false);
+      }
+    };
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setIsEditingFriday(false);
+    };
+    document.addEventListener('mousedown', handleOutside);
+    document.addEventListener('keydown', handleEsc);
+    return () => {
+      document.removeEventListener('mousedown', handleOutside);
+      document.removeEventListener('keydown', handleEsc);
+    };
+  }, [isEditingFriday]);
   const daysList: { num: DayOfWeek; name: string }[] = [
     { num: 1, name: 'Senin' },
     { num: 2, name: 'Selasa' },
@@ -334,7 +366,127 @@ export const LiveClockCard: React.FC<LiveClockCardProps> = ({
                   <strong className="text-slate-800">Mode Hari Libur:</strong> Hari yang dinonaktifkan otomatis mematikan <strong>Bel &amp; Murottal</strong> meski PC hidup 24 jam.
                 </span>
               </div>
-              <div className="flex items-center gap-2 shrink-0">
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                {onToggleFridayExtraOff && (
+                  <div className="relative" ref={fridayPopoverRef}>
+                    <div
+                      className={`rounded-lg text-[11px] font-bold border transition-all flex items-center overflow-hidden ${
+                        fridayExtraOff
+                          ? 'bg-amber-50 text-amber-800 border-amber-300'
+                          : 'bg-blue-50 text-blue-700 border-blue-200'
+                      }`}
+                    >
+                      <button
+                        type="button"
+                        onClick={onToggleFridayExtraOff}
+                        onDoubleClick={(e) => {
+                          e.preventDefault();
+                          setIsEditingFriday(true);
+                        }}
+                        title={
+                          fridayExtraOff
+                            ? `Klik 1x: Aktifkan Ekstra Jumat • Klik 2x / ikon pensil: Ubah jam pulang (${fridayEarlyDismissalTime} WIB)`
+                            : `Klik 1x: Liburkan Ekstra Jumat (Pulang ${fridayEarlyDismissalTime} WIB) • Klik 2x / ikon pensil: Atur jam`
+                        }
+                        className={`px-2.5 py-1 flex items-center gap-1.5 cursor-pointer transition-colors ${
+                          fridayExtraOff ? 'hover:bg-amber-100' : 'hover:bg-blue-100'
+                        }`}
+                      >
+                        <span className={`w-2 h-2 rounded-full ${fridayExtraOff ? 'bg-amber-500' : 'bg-blue-500'}`} />
+                        <span>
+                          {fridayExtraOff
+                            ? `Jumat Ekstra: Libur (Pulang ${fridayEarlyDismissalTime})`
+                            : 'Jumat Ekstra: Aktif'}
+                        </span>
+                      </button>
+
+                      {onUpdateFridayEarlyTime && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setIsEditingFriday((prev) => !prev);
+                          }}
+                          title="Klik untuk edit jam pulang hari Jumat & aksi cepat"
+                          className={`px-1.5 py-1 border-l cursor-pointer transition-colors ${
+                            fridayExtraOff
+                              ? 'border-amber-200 hover:bg-amber-100 text-amber-700'
+                              : 'border-blue-200 hover:bg-blue-100 text-blue-600'
+                          }`}
+                        >
+                          <Edit2 className="w-3 h-3" />
+                        </button>
+                      )}
+                    </div>
+
+                    {isEditingFriday && (
+                      <div className="absolute left-0 sm:left-auto sm:right-0 bottom-full mb-2 w-72 bg-white border border-slate-200 rounded-2xl shadow-xl p-3.5 z-50 space-y-3 text-left">
+                        <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                          <span className="text-xs font-black text-slate-900">
+                            Atur Ekstra Hari Jumat
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setIsEditingFriday(false)}
+                            className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+
+                        {onUpdateFridayEarlyTime && (
+                          <div className="space-y-1">
+                            <label className="text-[11px] font-bold text-slate-600 block">
+                              Jam Pulang Awal Saat Ekstra Libur (WIB):
+                            </label>
+                            <input
+                              type="time"
+                              value={fridayEarlyDismissalTime}
+                              onChange={(e) => {
+                                if (e.target.value) onUpdateFridayEarlyTime(e.target.value);
+                              }}
+                              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 font-mono font-black text-slate-900 text-xs focus:outline-hidden focus:border-blue-500 cursor-pointer"
+                            />
+                          </div>
+                        )}
+
+                        <div className="flex flex-col gap-1.5 pt-1">
+                          <button
+                            type="button"
+                            onClick={onToggleFridayExtraOff}
+                            className={`w-full px-3 py-2 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
+                              fridayExtraOff
+                                ? 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-600'
+                                : 'bg-amber-500 hover:bg-amber-600 text-white border-amber-500'
+                            }`}
+                          >
+                            {fridayExtraOff
+                              ? 'Aktifkan Ekstra Jumat (Normal)'
+                              : `Liburkan Ekstra (Pulang ${fridayEarlyDismissalTime})`}
+                          </button>
+
+                          {fridayExtraOff && onTriggerFridayEarlyDismissalNow && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onTriggerFridayEarlyDismissalNow();
+                                setIsEditingFriday(false);
+                              }}
+                              className="w-full px-3 py-2 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                            >
+                              <Play className="w-3 h-3 fill-current" />
+                              <span>Bunyikan Bel Pulang Sekarang</span>
+                            </button>
+                          )}
+                        </div>
+
+                        <p className="text-[10px] text-slate-500 leading-snug">
+                          Tip: Klik 1x pada tombol untuk ubah status, klik 2x atau tekan ikon pensil untuk ubah jam.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
                 {[
                   { num: 6 as DayOfWeek, label: 'Sabtu' },
                   { num: 0 as DayOfWeek, label: 'Minggu' },

@@ -20,6 +20,12 @@ import {
 import { ScheduleItem, DayOfWeek, BellCategory, AudioSettings } from '../types';
 import { getIndonesianDayName } from '../utils/timeSync';
 import { BellPlaybackState } from '../utils/audioSynth';
+import {
+  FRIDAY_EARLY_DISMISSAL_ID,
+  buildFridayEarlyDismissalSchedule,
+  getFridayEarlyDismissalTime,
+  isFridayEkstraSuppressedItem,
+} from '../utils/fridaySchedule';
 
 interface ScheduleListProps {
   schedules: ScheduleItem[];
@@ -59,11 +65,22 @@ export const ScheduleList: React.FC<ScheduleListProps> = ({
   onStopBell,
 }) => {
   const isSelectedDayDisabled = disabledDays.includes(selectedDay);
+  const isFridayExtraOff = selectedDay === 5 && Boolean(audioSettings.fridayExtraOff);
+  const fridayEarlyTime = getFridayEarlyDismissalTime(audioSettings);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterCategory, setFilterCategory] = useState<string>('all');
 
+  const fridayEarlyItem = isFridayExtraOff
+    ? buildFridayEarlyDismissalSchedule(schedules, audioSettings)
+    : null;
+
+  const combinedDayItems =
+    fridayEarlyItem && !schedules.some((s) => s.id === FRIDAY_EARLY_DISMISSAL_ID && s.days.includes(5))
+      ? [...schedules, fridayEarlyItem]
+      : schedules;
+
   // Filter schedules by day and search criteria
-  const daySchedules = schedules.filter((item) => {
+  const daySchedules = combinedDayItems.filter((item) => {
     const matchesDay = item.days.includes(selectedDay);
     const matchesQuery =
       item.label.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -76,6 +93,10 @@ export const ScheduleList: React.FC<ScheduleListProps> = ({
 
   // Sort by time (HH:MM)
   daySchedules.sort((a, b) => a.time.localeCompare(b.time));
+
+  const activeDayCount = daySchedules.filter(
+    (item) => item.enabled && !isFridayEkstraSuppressedItem(item, selectedDay, audioSettings)
+  ).length;
 
   const getCategoryBadge = (category: BellCategory) => {
     switch (category) {
@@ -153,7 +174,7 @@ export const ScheduleList: React.FC<ScheduleListProps> = ({
             <h2 className="text-xl sm:text-2xl font-black text-slate-900 flex items-center gap-2">
               <span>Jadwal Bel Hari {getIndonesianDayName(selectedDay)}</span>
               <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2.5 py-0.5 rounded-full font-bold">
-                {daySchedules.length} Bel Aktif
+                {activeDayCount} Bel Aktif
               </span>
             </h2>
           </div>
@@ -313,12 +334,18 @@ export const ScheduleList: React.FC<ScheduleListProps> = ({
           {daySchedules.map((item) => {
             const catBadge = getCategoryBadge(item.category);
             const fullSpeechPreview = `${audioSettings.globalPrefix}${item.speechText}`;
+            const isVirtualFridayEarly = item.id === FRIDAY_EARLY_DISMISSAL_ID;
+            const isSuppressedForFriday = isFridayEkstraSuppressedItem(item, selectedDay, audioSettings);
 
             return (
               <div
                 key={item.id}
                 className={`bg-white border rounded-2xl p-4 sm:p-5 transition-all flex flex-col md:flex-row items-start md:items-center justify-between gap-4 ${
-                  item.enabled
+                  isVirtualFridayEarly
+                    ? 'border-emerald-300 bg-emerald-50/30 shadow-sm'
+                    : isSuppressedForFriday
+                    ? 'border-amber-200/80 opacity-55 bg-amber-50/20'
+                    : item.enabled
                     ? 'border-slate-200 hover:border-blue-300 hover:shadow-md'
                     : 'border-slate-200 opacity-60 bg-slate-50/70'
                 }`}
@@ -339,6 +366,18 @@ export const ScheduleList: React.FC<ScheduleListProps> = ({
                       <h3 className="text-sm sm:text-base font-extrabold text-slate-900 tracking-wide truncate">
                         {item.label}
                       </h3>
+
+                      {isVirtualFridayEarly && (
+                        <span className="text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-300 px-2.5 py-0.5 rounded-full shrink-0">
+                          Otomatis Mode Pulang Awal • +Rekaman Tambahan
+                        </span>
+                      )}
+
+                      {isSuppressedForFriday && (
+                        <span className="text-[10px] font-black bg-amber-100 text-amber-800 border border-amber-300 px-2.5 py-0.5 rounded-full shrink-0">
+                          Diliburkan Hari Ini (Pulang {fridayEarlyTime})
+                        </span>
+                      )}
 
                       <span
                         className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full border flex items-center gap-1.5 shrink-0 ${catBadge.bg}`}
@@ -446,46 +485,55 @@ export const ScheduleList: React.FC<ScheduleListProps> = ({
                     </>
                   )}
 
-                  {/* Toggle Active */}
-                  <button
-                    onClick={() => onToggleScheduleItem(item.id)}
-                    className={`px-3 py-2 rounded-xl text-xs font-bold border transition-all flex items-center gap-1.5 cursor-pointer ${
-                      item.enabled
-                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
-                        : 'bg-slate-100 text-slate-500 border-slate-200 hover:bg-slate-200'
-                    }`}
-                    title={item.enabled ? 'Nonaktifkan Bel Ini' : 'Aktifkan Bel Ini'}
-                  >
-                    {item.enabled ? (
-                      <>
-                        <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
-                        <span>Aktif</span>
-                      </>
-                    ) : (
-                      <>
-                        <XCircle className="w-3.5 h-3.5 text-slate-400" />
-                        <span>Mati</span>
-                      </>
-                    )}
-                  </button>
+                  {isVirtualFridayEarly ? (
+                    <span className="px-3 py-2 rounded-xl text-xs font-bold border bg-emerald-50 text-emerald-700 border-emerald-200 flex items-center gap-1.5">
+                      <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>Aktif Otomatis</span>
+                    </span>
+                  ) : (
+                    <>
+                      {/* Toggle Active */}
+                      <button
+                        onClick={() => onToggleScheduleItem(item.id)}
+                        className={`px-3 py-2 rounded-xl text-xs font-bold border transition-all flex items-center gap-1.5 cursor-pointer ${
+                          item.enabled
+                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+                            : 'bg-slate-100 text-slate-500 border-slate-200 hover:bg-slate-200'
+                        }`}
+                        title={item.enabled ? 'Nonaktifkan Bel Ini' : 'Aktifkan Bel Ini'}
+                      >
+                        {item.enabled ? (
+                          <>
+                            <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
+                            <span>Aktif</span>
+                          </>
+                        ) : (
+                          <>
+                            <XCircle className="w-3.5 h-3.5 text-slate-400" />
+                            <span>Mati</span>
+                          </>
+                        )}
+                      </button>
 
-                  {/* Edit */}
-                  <button
-                    onClick={() => onEditScheduleItem(item)}
-                    className="bg-slate-50 hover:bg-blue-50 text-slate-600 hover:text-blue-600 border border-slate-200 p-2 rounded-xl transition-all cursor-pointer"
-                    title="Edit Item Bel Ini"
-                  >
-                    <Edit2 className="w-4 h-4" />
-                  </button>
+                      {/* Edit */}
+                      <button
+                        onClick={() => onEditScheduleItem(item)}
+                        className="bg-slate-50 hover:bg-blue-50 text-slate-600 hover:text-blue-600 border border-slate-200 p-2 rounded-xl transition-all cursor-pointer"
+                        title="Edit Item Bel Ini"
+                      >
+                        <Edit2 className="w-4 h-4" />
+                      </button>
 
-                  {/* Delete */}
-                  <button
-                    onClick={() => onDeleteScheduleItem(item.id)}
-                    className="bg-slate-50 hover:bg-rose-50 text-slate-400 hover:text-rose-600 border border-slate-200 hover:border-rose-200 p-2 rounded-xl transition-all cursor-pointer"
-                    title="Hapus Item Bel"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+                      {/* Delete */}
+                      <button
+                        onClick={() => onDeleteScheduleItem(item.id)}
+                        className="bg-slate-50 hover:bg-rose-50 text-slate-400 hover:text-rose-600 border border-slate-200 hover:border-rose-200 p-2 rounded-xl transition-all cursor-pointer"
+                        title="Hapus Item Bel"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
             );

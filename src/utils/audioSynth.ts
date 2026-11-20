@@ -973,6 +973,8 @@ export interface PlayBellSequenceOptions {
   scheduleId?: string;
   scheduleTime?: string;
   skipPostBellTracks?: boolean;
+  fallbackMatchScheduleIds?: string[];
+  fallbackMatchTimes?: string[];
 }
 
 /**
@@ -1260,6 +1262,20 @@ export async function playBellSequence(
         if (track.scheduleId === 'all') return true;
         if (options?.scheduleId && track.scheduleId === options.scheduleId) return true;
         if (options?.scheduleTime && track.scheduleTime === options.scheduleTime) return true;
+        if (
+          options?.fallbackMatchScheduleIds &&
+          track.scheduleId &&
+          options.fallbackMatchScheduleIds.includes(track.scheduleId)
+        ) {
+          return true;
+        }
+        if (
+          options?.fallbackMatchTimes &&
+          track.scheduleTime &&
+          options.fallbackMatchTimes.includes(track.scheduleTime)
+        ) {
+          return true;
+        }
         return false;
       });
 

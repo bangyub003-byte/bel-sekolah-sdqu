@@ -39,6 +39,13 @@ import {
   pushSchoolConfigToCloud,
   subscribeToCloudBellData,
 } from './utils/cloudSync';
+import {
+  FRIDAY_EARLY_DISMISSAL_ID,
+  buildFridayEarlyDismissalSchedule,
+  getDismissalPostBellMatchTargets,
+  getEffectiveDaySchedules,
+  getFridayEarlyDismissalTime,
+} from './utils/fridaySchedule';
 import { Navbar } from './components/Navbar';
 import { AudioPermissionBanner } from './components/AudioPermissionBanner';
 import { LiveClockCard } from './components/LiveClockCard';
@@ -851,8 +858,10 @@ export default function App() {
         ) {
           const nowTotalSecs =
             now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
-          const enabledTodayBells = currentSchedules.filter(
-            (item) => item.enabled && item.days.includes(dayNum)
+          const enabledTodayBells = getEffectiveDaySchedules(
+            currentSchedules,
+            dayNum,
+            currentSettings
           );
 
           for (const bell of enabledTodayBells) {
@@ -878,12 +887,11 @@ export default function App() {
         // 2. Check Scheduled Bells for current HH:MM — strictly ONCE per minute (prevents duplicate readings)
         const minuteKey = `${dateKey}-${currentHHMM}`;
         if (!firedMinutesRef.current.has(minuteKey)) {
-          const matchingBells = currentSchedules.filter(
-            (item) =>
-              item.enabled &&
-              item.time === currentHHMM &&
-              item.days.includes(dayNum)
-          );
+          const matchingBells = getEffectiveDaySchedules(
+            currentSchedules,
+            dayNum,
+            currentSettings
+          ).filter((item) => item.time === currentHHMM);
 
           if (matchingBells.length > 0) {
             // Mark minute immediately before any async call
@@ -1130,6 +1138,11 @@ export default function App() {
     setBellLogs((prev) => [newLog, ...prev.slice(0, 99)]);
 
     try {
+      const dismissalTargets =
+        item.id === FRIDAY_EARLY_DISMISSAL_ID
+          ? getDismissalPostBellMatchTargets(schedulesRef.current)
+          : null;
+
       await playBellSequence(
         item.chimeType,
         fullText,
@@ -1149,6 +1162,12 @@ export default function App() {
           label: `${item.time} - ${item.label}`,
           scheduleId: item.id,
           scheduleTime: item.time,
+          ...(dismissalTargets
+            ? {
+                fallbackMatchScheduleIds: dismissalTargets.matchIds,
+                fallbackMatchTimes: dismissalTargets.matchTimes,
+              }
+            : {}),
         }
       );
     } catch (err) {
@@ -1173,6 +1192,40 @@ export default function App() {
     });
   };
 
+  const fridayEarlyTime = getFridayEarlyDismissalTime(audioSettings);
+  const handleToggleFridayExtraOff = () => {
+    const nextOff = !audioSettings.fridayExtraOff;
+    const earlyTime = getFridayEarlyDismissalTime(audioSettings);
+    setAudioSettings((prev) => ({
+      ...prev,
+      fridayExtraOff: nextOff,
+      fridayEarlyDismissalTime: prev.fridayEarlyDismissalTime || '12:30',
+    }));
+
+    const newLog: BellLog = {
+      id: `log-friday-${Date.now()}`,
+      timestamp: Date.now(),
+      timeStr: format24HourTime(currentTime, false),
+      dayName: 'Jumat',
+      scheduleLabel: nextOff
+        ? `Ekstra Jumat Diliburkan (Pulang ${earlyTime} WIB)`
+        : 'Ekstra Jumat Diaktifkan (Jadwal Normal)',
+      triggerType: 'manual',
+      status: 'success',
+      details: nextOff
+        ? `Bel pulang otomatis dijadwalkan pukul ${earlyTime} WIB beserta rekaman tambahan otomatis.`
+        : 'Jadwal bel hari Jumat kembali mengikuti pengaturan normal.',
+    };
+    setBellLogs((prev) => [newLog, ...prev.slice(0, 99)]);
+  };
+
+  const handleUpdateFridayEarlyTime = (time: string) => {
+    setAudioSettings((prev) => ({
+      ...prev,
+      fridayEarlyDismissalTime: time,
+    }));
+  };
+
   // Calculate Next Bell Countdown for Today
   let nextScheduleItem: ScheduleItem | null = null;
   let countdownSeconds: number | null = null;
@@ -1185,9 +1238,7 @@ export default function App() {
   const isTodayGloballyDisabled = disabledDays.includes(todayDayNum);
   const todayActiveSchedules = isTodayGloballyDisabled
     ? []
-    : schedules
-        .filter((item) => item.enabled && item.days.includes(todayDayNum))
-        .sort((a, b) => a.time.localeCompare(b.time));
+    : getEffectiveDaySchedules(schedules, todayDayNum, audioSettings);
 
   for (const item of todayActiveSchedules) {
     const [hStr, mStr] = item.time.split(':');
@@ -1202,9 +1253,11 @@ export default function App() {
 
   // Current or most recent scheduled bell earlier today (for quick manual replay button near clock/date)
   let latestScheduleItem: ScheduleItem | null = null;
-  const todayScheduledSorted = schedules
-    .filter((item) => item.enabled && item.days.includes(todayDayNum))
-    .sort((a, b) => a.time.localeCompare(b.time));
+  const todayScheduledSorted = getEffectiveDaySchedules(
+    schedules,
+    todayDayNum,
+    audioSettings
+  );
 
   for (const item of todayScheduledSorted) {
     const [hStr, mStr] = item.time.split(':');
@@ -1262,6 +1315,11 @@ export default function App() {
     };
     setBellLogs((prev) => [newLog, ...prev.slice(0, 99)]);
 
+    const dismissalTargets =
+      item.id === FRIDAY_EARLY_DISMISSAL_ID
+        ? getDismissalPostBellMatchTargets(schedulesRef.current)
+        : null;
+
     await playBellSequence(
       item.chimeType,
       fullText,
@@ -1281,8 +1339,19 @@ export default function App() {
         label: `${item.time} - ${item.label}`,
         scheduleId: item.id,
         scheduleTime: item.time,
+        ...(dismissalTargets
+          ? {
+              fallbackMatchScheduleIds: dismissalTargets.matchIds,
+              fallbackMatchTimes: dismissalTargets.matchTimes,
+            }
+          : {}),
       }
     );
+  };
+
+  const handleTriggerFridayEarlyDismissalNow = () => {
+    const earlyItem = buildFridayEarlyDismissalSchedule(schedules, audioSettings);
+    void handleTestScheduleItem(earlyItem);
   };
 
   // Manual Bell Logging
@@ -1469,6 +1538,11 @@ export default function App() {
           onTriggerScheduleBell={handleTestScheduleItem}
           disabledDays={disabledDays}
           onToggleDisabledDay={handleToggleDisabledDay}
+          fridayExtraOff={Boolean(audioSettings.fridayExtraOff)}
+          fridayEarlyDismissalTime={fridayEarlyTime}
+          onToggleFridayExtraOff={handleToggleFridayExtraOff}
+          onUpdateFridayEarlyTime={handleUpdateFridayEarlyTime}
+          onTriggerFridayEarlyDismissalNow={handleTriggerFridayEarlyDismissalNow}
           bellPlayback={bellPlayback}
           onTogglePauseBell={togglePauseBellPlayback}
           onStopBell={stopAllBellAudio}
