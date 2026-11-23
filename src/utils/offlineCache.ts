@@ -371,7 +371,7 @@ export function collectScheduleTtsTargets(
 async function resolveTranslationForOfflineCache(
   sourceText: string,
   targetLanguage: SpeechLanguage
-): Promise<{ text: string | null; calledApi: boolean }> {
+): Promise<{ text: string | null; calledApi: boolean; quotaExceeded?: boolean }> {
   if (!sourceText.trim()) return { text: null, calledApi: false };
   if (targetLanguage === 'id') return { text: sourceText.trim(), calledApi: false };
 
@@ -386,7 +386,7 @@ async function resolveTranslationForOfflineCache(
 
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      if (attempt > 0) await sleep(1200);
+      if (attempt > 0) await sleep(1500);
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 12000);
       const res = await fetch('/api/voice/translate', {
@@ -400,8 +400,14 @@ async function resolveTranslationForOfflineCache(
       });
       clearTimeout(timeoutId);
 
+      if (res.status === 429) {
+        return { text: null, calledApi: true, quotaExceeded: true };
+      }
       if (!res.ok) continue;
       const data = await res.json();
+      if (data.quotaExceeded || data.status === 'quota_exceeded') {
+        return { text: null, calledApi: true, quotaExceeded: true };
+      }
       if (data.status === 'success' && data.translatedText) {
         saveTranslationOffline(targetLanguage, sourceText, data.translatedText);
         return { text: data.translatedText, calledApi: true };
@@ -432,7 +438,7 @@ async function fetchAndCacheSingleTts(
     try {
       if (attempt > 0) await sleep(2200);
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 16000);
+      const timeoutId = setTimeout(() => controller.abort(), 18000);
 
       const res = await fetch('/api/voice/clone-tts', {
         method: 'POST',
@@ -447,7 +453,6 @@ async function fetchAndCacheSingleTts(
       clearTimeout(timeoutId);
 
       if (res.status === 429) {
-        if (attempt === 0) continue;
         return 'quota_exceeded';
       }
 
@@ -457,7 +462,6 @@ async function fetchAndCacheSingleTts(
 
       const data = await res.json();
       if (data.quotaExceeded || data.status === 'quota_exceeded') {
-        if (attempt === 0) continue;
         return 'quota_exceeded';
       }
 
@@ -531,12 +535,16 @@ export async function getOfflineCacheStats(
 }
 
 export interface OfflinePreCacheProgress {
-  phase: 'http' | 'tts';
+  phase: 'http' | 'tts' | 'cooldown';
   done: number;
   total: number;
   label: string;
   statusText: string;
+  cooldownSeconds?: number;
 }
+
+const AI_TTS_INTER_REQUEST_DELAY_MS = 4500;
+const AI_TTS_COOLDOWN_SECONDS = 65;
 
 export async function cacheAllAppAudioForOffline(
   schedules: ScheduleItem[],
@@ -592,6 +600,27 @@ export async function cacheAllAppAudioForOffline(
   let failedTts = 0;
   let quotaReached = false;
   const processedKeysInBatch = new Set<string>();
+  let lastTtsApiFinishedAt = 0;
+  let consecutiveQuotaRetries = 0;
+
+  const runCooldownCountdown = async (
+    completedCount: number,
+    totalCount: number,
+    label: string
+  ) => {
+    for (let sec = AI_TTS_COOLDOWN_SECONDS; sec > 0; sec--) {
+      onProgress?.({
+        phase: 'cooldown',
+        done: completedCount,
+        total: totalCount,
+        label,
+        cooldownSeconds: sec,
+        statusText: `Menunggu kuota server reset dalam ${sec} detik... (${completedCount}/${totalCount} jadwal)`,
+      });
+      await sleep(1000);
+    }
+    lastTtsApiFinishedAt = 0;
+  };
 
   for (let i = 0; i < ttsTargets.length; i++) {
     const target = ttsTargets[i];
@@ -603,28 +632,32 @@ export async function cacheAllAppAudioForOffline(
       statusText: `Mengunduh Suara AI TTS: ${i}/${ttsTargets.length} jadwal selesai... (${target.label})`,
     });
 
-    if (quotaReached) {
-      failedTts++;
-      continue;
-    }
-
     let textToSpeak = target.resolvedText;
     if (!textToSpeak && target.needsTranslation) {
       const transRes = await resolveTranslationForOfflineCache(target.sourceText, target.language);
+      if (transRes.quotaExceeded && consecutiveQuotaRetries < 5) {
+        consecutiveQuotaRetries++;
+        await runCooldownCountdown(i, ttsTargets.length, target.label);
+        i--;
+        continue;
+      }
       textToSpeak = transRes.text;
       if (transRes.calledApi) {
-        await sleep(350);
+        await sleep(800);
       }
     }
 
     if (!textToSpeak || !textToSpeak.trim()) {
+      consecutiveQuotaRetries = 0;
       failedTts++;
       continue;
     }
 
     const resolvedCacheKey = buildTtsCacheKeyUrl(target.voiceName, target.language, textToSpeak);
-    if (processedKeysInBatch.has(resolvedCacheKey)) {
+    if (processedKeysInBatch.has(resolvedCacheKey) || (await hasOfflineAudioCacheKey(resolvedCacheKey))) {
+      processedKeysInBatch.add(resolvedCacheKey);
       alreadyCachedTts++;
+      consecutiveQuotaRetries = 0;
       onProgress?.({
         phase: 'tts',
         done: i + 1,
@@ -634,26 +667,41 @@ export async function cacheAllAppAudioForOffline(
       });
       continue;
     }
-    processedKeysInBatch.add(resolvedCacheKey);
+
+    // Pace requests to 4.5s intervals (~12-13 RPM) so free/regular AI TTS quotas are respected
+    if (lastTtsApiFinishedAt > 0) {
+      const elapsed = Date.now() - lastTtsApiFinishedAt;
+      if (elapsed < AI_TTS_INTER_REQUEST_DELAY_MS) {
+        await sleep(AI_TTS_INTER_REQUEST_DELAY_MS - elapsed);
+      }
+    }
 
     const ttsRes = await fetchAndCacheSingleTts(textToSpeak, target.voiceName, target.language);
-    if (ttsRes === 'already_cached') {
-      alreadyCachedTts++;
-    } else if (ttsRes === 'downloaded') {
-      downloadedTts++;
-      await onStatsUpdate?.();
-      // Safe sequential pacing delay to respect Gemini API rate limits
-      if (i < ttsTargets.length - 1) {
-        await sleep(1100);
+    lastTtsApiFinishedAt = Date.now();
+
+    if (ttsRes === 'quota_exceeded') {
+      if (consecutiveQuotaRetries < 5 && (typeof navigator === 'undefined' || navigator.onLine !== false)) {
+        consecutiveQuotaRetries++;
+        await runCooldownCountdown(i, ttsTargets.length, target.label);
+        i--;
+        continue;
       }
-    } else if (ttsRes === 'quota_exceeded') {
       quotaReached = true;
       failedTts++;
+      continue;
+    }
+
+    consecutiveQuotaRetries = 0;
+
+    if (ttsRes === 'already_cached') {
+      processedKeysInBatch.add(resolvedCacheKey);
+      alreadyCachedTts++;
+    } else if (ttsRes === 'downloaded') {
+      processedKeysInBatch.add(resolvedCacheKey);
+      downloadedTts++;
+      await onStatsUpdate?.();
     } else {
       failedTts++;
-      if (i < ttsTargets.length - 1) {
-        await sleep(700);
-      }
     }
 
     onProgress?.({

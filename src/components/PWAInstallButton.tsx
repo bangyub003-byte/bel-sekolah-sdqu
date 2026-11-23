@@ -142,13 +142,10 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({
         }
       }
 
-      if (result.quotaReached || result.failedTts > 0 || result.failedUrls.length > 0) {
+      if (result.failedTts > 0 || result.failedUrls.length > 0) {
         setCacheResultWarning(true);
-        const quotaNote = result.quotaReached
-          ? ' Limit sementara server AI TTS tercapai; tunggu ~1 menit lalu klik tombol ini lagi untuk melanjutkan sisa jadwal yang belum ter-cache.'
-          : ' Periksa koneksi internet lalu klik lagi untuk melengkapi sisa audio.';
         setCacheResultMsg(
-          `${parts.join(' • ') || 'Proses selesai sebagian.'}.${quotaNote}`
+          `${parts.join(' • ') || 'Proses selesai sebagian.'}. Sebagian file gagal diunduh karena kendala jaringan; periksa koneksi internet Anda.`
         );
       } else if (parts.length === 0) {
         setCacheResultMsg(
@@ -413,16 +410,30 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({
                 </p>
 
                 {cacheProgress && (
-                  <div className="bg-white border border-blue-200 rounded-xl p-2.5 space-y-1.5">
-                    <div className="flex items-center justify-between gap-2 text-[11px] font-bold text-blue-800">
+                  <div
+                    className={`bg-white border rounded-xl p-2.5 space-y-1.5 ${
+                      cacheProgress.phase === 'cooldown' ? 'border-amber-200' : 'border-blue-200'
+                    }`}
+                  >
+                    <div
+                      className={`flex items-center justify-between gap-2 text-[11px] font-bold ${
+                        cacheProgress.phase === 'cooldown' ? 'text-amber-700' : 'text-blue-800'
+                      }`}
+                    >
                       <span className="truncate">{cacheProgress.statusText}</span>
                       <span className="shrink-0">
                         {cacheProgress.done}/{cacheProgress.total}
                       </span>
                     </div>
-                    <div className="w-full h-2 rounded-full bg-blue-100 overflow-hidden">
+                    <div
+                      className={`w-full h-2 rounded-full overflow-hidden ${
+                        cacheProgress.phase === 'cooldown' ? 'bg-amber-100' : 'bg-blue-100'
+                      }`}
+                    >
                       <div
-                        className="h-full bg-blue-600 transition-all duration-200"
+                        className={`h-full transition-all duration-200 ${
+                          cacheProgress.phase === 'cooldown' ? 'bg-amber-500' : 'bg-blue-600'
+                        }`}
                         style={{
                           width: `${Math.round(
                             (cacheProgress.done / Math.max(1, cacheProgress.total)) * 100
