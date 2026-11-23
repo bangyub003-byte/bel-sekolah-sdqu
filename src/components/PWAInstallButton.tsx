@@ -20,6 +20,7 @@ import { AudioSettings, MurottalConfig, ScheduleItem } from '../types';
 import {
   cacheAllAppAudioForOffline,
   getOfflineCacheStats,
+  OfflinePreCacheProgress,
 } from '../utils/offlineCache';
 
 interface PWAInstallButtonProps {
@@ -42,19 +43,20 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({
     cachedHttpUrls: number;
     localCount: number;
     cachedTtsCount: number;
+    totalTtsTargets: number;
+    cachedScheduleTtsCount: number;
   }>({
     totalHttpUrls: 0,
     cachedHttpUrls: 0,
     localCount: 0,
     cachedTtsCount: 0,
+    totalTtsTargets: 0,
+    cachedScheduleTtsCount: 0,
   });
   const [isCachingAudio, setIsCachingAudio] = useState(false);
-  const [cacheProgress, setCacheProgress] = useState<{
-    done: number;
-    total: number;
-    label: string;
-  } | null>(null);
+  const [cacheProgress, setCacheProgress] = useState<OfflinePreCacheProgress | null>(null);
   const [cacheResultMsg, setCacheResultMsg] = useState<string | null>(null);
+  const [cacheResultWarning, setCacheResultWarning] = useState(false);
 
   const refreshStats = async () => {
     const s = await getOfflineCacheStats(schedules, audioSettings, murottalConfig);
@@ -93,28 +95,68 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({
   const handleCacheAudioOffline = async () => {
     setIsCachingAudio(true);
     setCacheResultMsg(null);
-    setCacheProgress({ done: 0, total: Math.max(1, stats.totalHttpUrls), label: 'Memulai...' });
+    setCacheResultWarning(false);
+    setCacheProgress({
+      phase: stats.totalHttpUrls > 0 ? 'http' : 'tts',
+      done: 0,
+      total: Math.max(1, stats.totalHttpUrls || stats.totalTtsTargets),
+      label: 'Memulai...',
+      statusText: 'Menyiapkan daftar audio & suara AI TTS jadwal...',
+    });
     try {
       const result = await cacheAllAppAudioForOffline(
         schedules,
         audioSettings,
         murottalConfig,
-        (done, total, currentLabel) => {
-          setCacheProgress({ done, total, label: currentLabel });
+        (progress) => {
+          setCacheProgress(progress);
+        },
+        async () => {
+          await refreshStats();
         }
       );
       await refreshStats();
-      if (result.totalHttp === 0) {
+
+      const totalReadyTts = result.downloadedTts + result.alreadyCachedTts;
+      const parts: string[] = [];
+
+      if (result.totalHttp > 0) {
+        if (result.failedUrls.length === 0) {
+          parts.push(`${result.successCount}/${result.totalHttp} audio cloud & murottal siap offline`);
+        } else {
+          parts.push(
+            `${result.successCount}/${result.totalHttp} audio cloud tersimpan (${result.failedUrls.length} gagal)`
+          );
+        }
+      }
+
+      if (result.totalTts > 0) {
+        if (result.failedTts === 0) {
+          parts.push(
+            `${totalReadyTts}/${result.totalTts} suara AI TTS jadwal siap offline (${result.downloadedTts} baru diunduh)`
+          );
+        } else {
+          parts.push(
+            `${totalReadyTts}/${result.totalTts} suara AI TTS tersimpan (${result.failedTts} belum selesai)`
+          );
+        }
+      }
+
+      if (result.quotaReached || result.failedTts > 0 || result.failedUrls.length > 0) {
+        setCacheResultWarning(true);
+        const quotaNote = result.quotaReached
+          ? ' Limit sementara server AI TTS tercapai; tunggu ~1 menit lalu klik tombol ini lagi untuk melanjutkan sisa jadwal yang belum ter-cache.'
+          : ' Periksa koneksi internet lalu klik lagi untuk melengkapi sisa audio.';
+        setCacheResultMsg(
+          `${parts.join(' • ') || 'Proses selesai sebagian.'}.${quotaNote}`
+        );
+      } else if (parts.length === 0) {
         setCacheResultMsg(
           'Semua audio Anda sudah tersimpan secara lokal di perangkat ini dan siap dipakai tanpa internet.'
         );
-      } else if (result.failedUrls.length === 0) {
-        setCacheResultMsg(
-          `Berhasil! ${result.successCount} file audio online & murottal kini tersimpan offline di komputer.`
-        );
       } else {
         setCacheResultMsg(
-          `Tersimpan ${result.successCount} dari ${result.totalHttp} audio online. ${result.failedUrls.length} tautan gagal diunduh (cek koneksi atau izin tautan).`
+          `Berhasil! ${parts.join(' • ')}. Seluruh bel siap berbunyi 100% tanpa internet.`
         );
       }
     } finally {
@@ -360,19 +402,21 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({
                   </div>
                   <div className="bg-white border border-slate-200 rounded-xl p-2">
                     <div className="text-sm font-black text-indigo-700">{stats.cachedTtsCount}</div>
-                    <div className="text-[10px] font-semibold text-slate-500">Suara AI Ter-cache</div>
+                    <div className="text-[10px] font-semibold text-slate-500">
+                      Suara AI Ter-cache ({stats.cachedScheduleTtsCount}/{stats.totalTtsTargets} jadwal)
+                    </div>
                   </div>
                 </div>
 
                 <p className="text-[11px] text-slate-600">
-                  Klik tombol di bawah saat internet sedang tersambung agar seluruh nada dering cloud, rekaman tambahan, dan Murottal terjadwal diunduh ke komputer (saat offline, pengumuman teks juga otomatis memakai suara lokal komputer).
+                  Klik tombol di bawah saat internet tersambung untuk mengunduh nada dering cloud, Murottal, serta seluruh pengumuman Suara AI TTS (Reguler, ASAS, Jumat Ekstra & terjemahannya) agar saat offline tetap memakai suara AI utama yang fasih.
                 </p>
 
                 {cacheProgress && (
                   <div className="bg-white border border-blue-200 rounded-xl p-2.5 space-y-1.5">
-                    <div className="flex items-center justify-between text-[11px] font-bold text-blue-800">
-                      <span className="truncate">Mengunduh: {cacheProgress.label}</span>
-                      <span>
+                    <div className="flex items-center justify-between gap-2 text-[11px] font-bold text-blue-800">
+                      <span className="truncate">{cacheProgress.statusText}</span>
+                      <span className="shrink-0">
                         {cacheProgress.done}/{cacheProgress.total}
                       </span>
                     </div>
@@ -390,7 +434,13 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({
                 )}
 
                 {cacheResultMsg && (
-                  <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-2.5 text-xs font-semibold text-emerald-800">
+                  <div
+                    className={`border rounded-xl p-2.5 text-xs font-semibold ${
+                      cacheResultWarning
+                        ? 'bg-amber-50 border-amber-200 text-amber-900'
+                        : 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                    }`}
+                  >
                     {cacheResultMsg}
                   </div>
                 )}

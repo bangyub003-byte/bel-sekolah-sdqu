@@ -833,6 +833,21 @@ export async function speakTTS(
     }
   }
 
+  // Even if a fallback browser voiceURI is configured, prioritize pre-cached AI TTS audio from offline CacheStorage first
+  if (!useAutomaticAiVoice && settings.enableTTS !== false) {
+    try {
+      const cachedAiUrl = await getDataUrlAudioFromOfflineCache(
+        buildTtsCacheKeyUrl('Fenrir', language, text)
+      );
+      if (cachedAiUrl) {
+        const played = await playCustomAudio(cachedAiUrl, settings.volume ?? 1.0);
+        if (played) return;
+      }
+    } catch {
+      // Fallback smoothly to browser speech engine below
+    }
+  }
+
   // Fallback to Web Speech API strictly favoring verified male voices
   return new Promise((resolve) => {
     if (!('speechSynthesis' in window)) {
