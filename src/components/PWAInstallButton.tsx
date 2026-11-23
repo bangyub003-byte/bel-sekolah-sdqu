@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   CheckCircle2,
   Download,
@@ -199,10 +200,17 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({
         </span>
       </button>
 
-      {/* Modal Mode Offline & Auto-Start Komputer */}
-      {isModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
-          <div className="bg-white rounded-3xl max-w-xl w-full max-h-[92vh] flex flex-col shadow-2xl border border-blue-100 overflow-hidden my-auto text-slate-800 animate-fadeIn">
+      {/* Modal Mode Offline & Auto-Start Komputer (via Portal ke document.body agar tidak terpotong header) */}
+      {isModalOpen &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            onClick={(e) => {
+              if (e.target === e.currentTarget) setIsModalOpen(false);
+            }}
+            className="fixed inset-0 z-[100] bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-5 overflow-y-auto"
+          >
+            <div className="bg-white rounded-3xl max-w-xl w-full max-h-[90vh] flex flex-col shadow-2xl border border-blue-100 overflow-hidden my-auto text-slate-800 animate-fadeIn">
             {/* Modal Header */}
             <div className="flex items-center justify-between p-4 sm:p-5 border-b border-slate-100 bg-gradient-to-r from-blue-600 via-indigo-600 to-sky-600 text-white shrink-0">
               <div className="flex items-center gap-2.5">
@@ -463,10 +471,11 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({
               >
                 Selesai
               </button>
+              </div>
             </div>
-          </div>
-        </div>
-      )}
+          </div>,
+          document.body
+        )}
     </>
   );
 };
