@@ -80,6 +80,17 @@ export function sanitizeAudioSettingsForCloud(settings: AudioSettings): AudioSet
     })
   ).filter((t) => t.audioUrl);
 
+  const asasSchedules = settings.asasSchedules
+    ? settings.asasSchedules.map((item) =>
+        stripUndefinedDeep({
+          ...item,
+          customChimeUrl: sanitizeAudioUrlForCloud(item.customChimeUrl),
+          customOutroChimeUrl: sanitizeAudioUrlForCloud(item.customOutroChimeUrl),
+          customAudioUrl: sanitizeAudioUrlForCloud(item.customAudioUrl),
+        })
+      )
+    : undefined;
+
   return stripUndefinedDeep({
     ...settings,
     customPrefixAudioUrl: sanitizeAudioUrlForCloud(settings.customPrefixAudioUrl),
@@ -87,6 +98,7 @@ export function sanitizeAudioSettingsForCloud(settings: AudioSettings): AudioSet
     clonedProfiles,
     customChimes,
     postBellTracks,
+    asasSchedules,
   });
 }
 

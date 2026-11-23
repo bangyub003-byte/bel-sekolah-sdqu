@@ -1,4 +1,5 @@
 import { AudioSettings, DayOfWeek, ScheduleItem } from '../types';
+import { DEFAULT_ASAS_SCHEDULES } from '../data/asasSchedule';
 
 export const FRIDAY_EARLY_DISMISSAL_ID = 'jumat-pulang-ekstra-libur';
 export const DEFAULT_FRIDAY_EARLY_TIME = '12:30';
@@ -123,13 +124,23 @@ export function getDismissalPostBellMatchTargets(schedules: ScheduleItem[]): {
 }
 
 /**
- * Returns the active, sorted schedules for a given day after applying Friday Extra mode.
+ * Returns the active, sorted schedules for a given day after applying ASAS mode or Friday Extra mode.
  */
 export function getEffectiveDaySchedules(
   schedules: ScheduleItem[],
   day: DayOfWeek,
   settings: AudioSettings
 ): ScheduleItem[] {
+  if (settings.asasModeEnabled) {
+    const asasList =
+      settings.asasSchedules && settings.asasSchedules.length > 0
+        ? settings.asasSchedules
+        : DEFAULT_ASAS_SCHEDULES;
+    return asasList
+      .filter((item) => item.enabled && item.days.includes(day))
+      .sort((a, b) => a.time.localeCompare(b.time));
+  }
+
   const baseActive = schedules.filter((item) => {
     if (!item.enabled || !item.days.includes(day)) return false;
     if (isFridayEkstraSuppressedItem(item, day, settings)) return false;

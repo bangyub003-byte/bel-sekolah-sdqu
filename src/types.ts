@@ -128,6 +128,8 @@ export interface AudioSettings {
   postBellTracks?: PostBellTrack[]; // Scheduled post-bell recordings/music played automatically after bell
   fridayExtraOff?: boolean; // true = Ekstrakurikuler Hari Jumat diliburkan (pulang lebih awal)
   fridayEarlyDismissalTime?: string; // Jam pulang awal hari Jumat saat ekstra libur (default '12:30')
+  asasModeEnabled?: boolean; // true = Mode Jadwal Khusus ASAS (Asesmen Akhir Semester)
+  asasSchedules?: ScheduleItem[]; // Daftar jadwal bel khusus ASAS (dapat diedit seperti jadwal biasa)
 }
 
 export interface TimeSyncInfo {

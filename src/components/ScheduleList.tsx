@@ -44,6 +44,7 @@ interface ScheduleListProps {
   bellPlayback?: BellPlaybackState;
   onTogglePauseBell?: () => void;
   onStopBell?: () => void;
+  asasModeEnabled?: boolean;
 }
 
 export const ScheduleList: React.FC<ScheduleListProps> = ({
@@ -63,9 +64,11 @@ export const ScheduleList: React.FC<ScheduleListProps> = ({
   bellPlayback,
   onTogglePauseBell,
   onStopBell,
+  asasModeEnabled = false,
 }) => {
   const isSelectedDayDisabled = disabledDays.includes(selectedDay);
-  const isFridayExtraOff = selectedDay === 5 && Boolean(audioSettings.fridayExtraOff);
+  const isFridayExtraOff =
+    !asasModeEnabled && selectedDay === 5 && Boolean(audioSettings.fridayExtraOff);
   const fridayEarlyTime = getFridayEarlyDismissalTime(audioSettings);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterCategory, setFilterCategory] = useState<string>('all');
@@ -95,7 +98,9 @@ export const ScheduleList: React.FC<ScheduleListProps> = ({
   daySchedules.sort((a, b) => a.time.localeCompare(b.time));
 
   const activeDayCount = daySchedules.filter(
-    (item) => item.enabled && !isFridayEkstraSuppressedItem(item, selectedDay, audioSettings)
+    (item) =>
+      item.enabled &&
+      (asasModeEnabled || !isFridayEkstraSuppressedItem(item, selectedDay, audioSettings))
   ).length;
 
   const getCategoryBadge = (category: BellCategory) => {
@@ -171,8 +176,17 @@ export const ScheduleList: React.FC<ScheduleListProps> = ({
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-5 border-b border-slate-100">
         <div>
           <div className="flex items-center gap-2">
-            <h2 className="text-xl sm:text-2xl font-black text-slate-900 flex items-center gap-2">
-              <span>Jadwal Bel Hari {getIndonesianDayName(selectedDay)}</span>
+            <h2 className="text-xl sm:text-2xl font-black text-slate-900 flex flex-wrap items-center gap-2">
+              <span>
+                {asasModeEnabled
+                  ? `Jadwal Bel ASAS Hari ${getIndonesianDayName(selectedDay)}`
+                  : `Jadwal Bel Hari ${getIndonesianDayName(selectedDay)}`}
+              </span>
+              {asasModeEnabled && (
+                <span className="text-[11px] bg-indigo-600 text-white px-2.5 py-0.5 rounded-full font-black tracking-wide">
+                  MODE ASAS AKTIF
+                </span>
+              )}
               <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2.5 py-0.5 rounded-full font-bold">
                 {activeDayCount} Bel Aktif
               </span>
@@ -334,8 +348,9 @@ export const ScheduleList: React.FC<ScheduleListProps> = ({
           {daySchedules.map((item) => {
             const catBadge = getCategoryBadge(item.category);
             const fullSpeechPreview = `${audioSettings.globalPrefix}${item.speechText}`;
-            const isVirtualFridayEarly = item.id === FRIDAY_EARLY_DISMISSAL_ID;
-            const isSuppressedForFriday = isFridayEkstraSuppressedItem(item, selectedDay, audioSettings);
+            const isVirtualFridayEarly = !asasModeEnabled && item.id === FRIDAY_EARLY_DISMISSAL_ID;
+            const isSuppressedForFriday =
+              !asasModeEnabled && isFridayEkstraSuppressedItem(item, selectedDay, audioSettings);
 
             return (
               <div

@@ -84,14 +84,19 @@ async function startServer() {
       let translatedText = "";
       let lastTranslateErr: any = null;
 
-      // Try primary model gemini-4-hydrogen, then fallback to gemini-3.1-flash-lite on spike/503/timeout
-      const translateAttempts: Array<{ model: string; thinkingLevel: ThinkingLevel }> = [
-        { model: "gemini-4-hydrogen", thinkingLevel: ThinkingLevel.LOW },
-        { model: "gemini-3.1-flash-lite", thinkingLevel: ThinkingLevel.MINIMAL },
+      // Use fast low-latency gemini-3.1-flash-lite first, with automatic retry & fallback to gemini-4-hydrogen
+      const translateAttempts: Array<{ model: string; thinkingLevel: ThinkingLevel; delayMs: number }> = [
+        { model: "gemini-3.1-flash-lite", thinkingLevel: ThinkingLevel.MINIMAL, delayMs: 0 },
+        { model: "gemini-4-hydrogen", thinkingLevel: ThinkingLevel.LOW, delayMs: 0 },
+        { model: "gemini-3.1-flash-lite", thinkingLevel: ThinkingLevel.MINIMAL, delayMs: 500 },
+        { model: "gemini-4-hydrogen", thinkingLevel: ThinkingLevel.LOW, delayMs: 800 },
       ];
 
       for (const attempt of translateAttempts) {
         try {
+          if (attempt.delayMs > 0) {
+            await new Promise((r) => setTimeout(r, attempt.delayMs));
+          }
           const translatePromise = ai.models.generateContent({
             model: attempt.model,
             contents: text.trim(),
@@ -113,7 +118,6 @@ async function startServer() {
           }
         } catch (err: any) {
           lastTranslateErr = err;
-          console.warn(`[Translate] ${attempt.model} fallback trigger:`, (err?.message || "").slice(0, 100));
         }
       }
 
@@ -125,10 +129,17 @@ async function startServer() {
       return res.json({ status: "success", translatedText });
     } catch (err: any) {
       const errStr = typeof err === "string" ? err : err?.message || "";
-      console.warn("[Translate] Error:", errStr.slice(0, 120));
-      return res.status(500).json({
+      const isBusy =
+        err?.status === 503 ||
+        err?.code === 503 ||
+        errStr.includes("503") ||
+        errStr.toLowerCase().includes("high demand") ||
+        errStr.toLowerCase().includes("unavailable");
+      return res.status(isBusy ? 503 : 500).json({
         status: "error",
-        error: err?.message || "Gagal menerjemahkan teks dengan AI.",
+        error: isBusy
+          ? "Layanan terjemahan AI sedang sibuk sementara. Silakan coba beberapa detik lagi."
+          : err?.message || "Gagal menerjemahkan teks dengan AI.",
       });
     }
   });

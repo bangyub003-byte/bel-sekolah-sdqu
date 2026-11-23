@@ -10,6 +10,7 @@ import {
   MurottalTrack,
 } from './types';
 import { INITIAL_SCHEDULES, DEFAULT_GLOBAL_PREFIX } from './data/defaultSchedule';
+import { DEFAULT_ASAS_SCHEDULES } from './data/asasSchedule';
 import { DEFAULT_MUROTTAL_CONFIG, DEFAULT_JUZ_30_TRACKS } from './data/defaultMurottal';
 import {
   syncTimeWithAPI,
@@ -489,6 +490,22 @@ export default function App() {
             };
           });
 
+          const localAsasMap = new Map<string, ScheduleItem>(
+            (currentLocal.asasSchedules || []).map((s) => [s.id, s])
+          );
+          const mergedAsasSchedules = schoolData.audioSettings.asasSchedules
+            ? schoolData.audioSettings.asasSchedules.map((cs) => {
+                const lp = localAsasMap.get(cs.id);
+                if (!lp) return cs;
+                return {
+                  ...cs,
+                  customAudioUrl: cs.customAudioUrl || lp.customAudioUrl,
+                  customChimeUrl: cs.customChimeUrl || lp.customChimeUrl,
+                  customOutroChimeUrl: cs.customOutroChimeUrl || lp.customOutroChimeUrl,
+                };
+              })
+            : currentLocal.asasSchedules;
+
           const mergedSettings: AudioSettings = {
             ...currentLocal,
             ...schoolData.audioSettings,
@@ -500,6 +517,7 @@ export default function App() {
               mergedProfiles.length > 0 ? mergedProfiles : currentLocal.clonedProfiles,
             customChimes: [...cloudChimes, ...localOnlyChimes],
             postBellTracks: [...cloudPostBell, ...localOnlyPostBell],
+            asasSchedules: mergedAsasSchedules,
           };
           const serialized = JSON.stringify(mergedSettings);
           if (serialized !== JSON.stringify(currentLocal)) {
@@ -1139,7 +1157,8 @@ export default function App() {
 
     try {
       const dismissalTargets =
-        item.id === FRIDAY_EARLY_DISMISSAL_ID
+        item.id === FRIDAY_EARLY_DISMISSAL_ID ||
+        (audioSettingsRef.current.asasModeEnabled && item.category === 'dismissal')
           ? getDismissalPostBellMatchTargets(schedulesRef.current)
           : null;
 
@@ -1224,6 +1243,41 @@ export default function App() {
       ...prev,
       fridayEarlyDismissalTime: time,
     }));
+  };
+
+  const asasModeEnabled = Boolean(audioSettings.asasModeEnabled);
+  const activeModeSchedules = asasModeEnabled
+    ? audioSettings.asasSchedules && audioSettings.asasSchedules.length > 0
+      ? audioSettings.asasSchedules
+      : DEFAULT_ASAS_SCHEDULES
+    : schedules;
+
+  const handleToggleAsasMode = () => {
+    const nextAsas = !audioSettings.asasModeEnabled;
+    setAudioSettings((prev) => ({
+      ...prev,
+      asasModeEnabled: nextAsas,
+      asasSchedules:
+        prev.asasSchedules && prev.asasSchedules.length > 0
+          ? prev.asasSchedules
+          : DEFAULT_ASAS_SCHEDULES,
+    }));
+
+    const newLog: BellLog = {
+      id: `log-asas-${Date.now()}`,
+      timestamp: Date.now(),
+      timeStr: format24HourTime(currentTime, false),
+      dayName: getIndonesianDayName(todayDayNum),
+      scheduleLabel: nextAsas
+        ? 'Mode ASAS Diaktifkan (Jadwal Asesmen Akhir Semester)'
+        : 'Mode ASAS Dinonaktifkan (Kembali ke Jadwal Normal)',
+      triggerType: 'manual',
+      status: 'success',
+      details: nextAsas
+        ? 'Jadwal bel beralih ke jadwal khusus ASAS (07:00 - 12:30 WIB).'
+        : 'Jadwal bel kembali menggunakan jadwal harian reguler sekolah.',
+    };
+    setBellLogs((prev) => [newLog, ...prev.slice(0, 99)]);
   };
 
   // Calculate Next Bell Countdown for Today
@@ -1316,7 +1370,8 @@ export default function App() {
     setBellLogs((prev) => [newLog, ...prev.slice(0, 99)]);
 
     const dismissalTargets =
-      item.id === FRIDAY_EARLY_DISMISSAL_ID
+      item.id === FRIDAY_EARLY_DISMISSAL_ID ||
+      (audioSettingsRef.current.asasModeEnabled && item.category === 'dismissal')
         ? getDismissalPostBellMatchTargets(schedulesRef.current)
         : null;
 
@@ -1369,7 +1424,24 @@ export default function App() {
     setBellLogs((prev) => [newLog, ...prev.slice(0, 99)]);
   };
 
-  // Schedule Item Operations
+  // Schedule Item Operations (automatically routes to ASAS schedules when Mode ASAS is active)
+  const updateActiveScheduleList = (updater: (prev: ScheduleItem[]) => ScheduleItem[]) => {
+    if (audioSettingsRef.current.asasModeEnabled) {
+      setAudioSettings((prev) => {
+        const currentAsas =
+          prev.asasSchedules && prev.asasSchedules.length > 0
+            ? prev.asasSchedules
+            : DEFAULT_ASAS_SCHEDULES;
+        return {
+          ...prev,
+          asasSchedules: updater(currentAsas),
+        };
+      });
+    } else {
+      setSchedules((prev) => updater(prev));
+    }
+  };
+
   const handleSaveScheduleItem = (
     savedItem: ScheduleItem,
     batchOptions?: {
@@ -1378,7 +1450,7 @@ export default function App() {
       applyChimeAlso: boolean;
     }
   ) => {
-    setSchedules((prev) => {
+    updateActiveScheduleList((prev) => {
       let updated = prev.some((x) => x.id === savedItem.id)
         ? prev.map((x) => (x.id === savedItem.id ? savedItem : x))
         : [...prev, savedItem];
@@ -1409,11 +1481,11 @@ export default function App() {
   };
 
   const handleDeleteScheduleItem = (id: string) => {
-    setSchedules((prev) => prev.filter((x) => x.id !== id));
+    updateActiveScheduleList((prev) => prev.filter((x) => x.id !== id));
   };
 
   const handleToggleScheduleItem = (id: string) => {
-    setSchedules((prev) =>
+    updateActiveScheduleList((prev) =>
       prev.map((x) => (x.id === id ? { ...x, enabled: !x.enabled } : x))
     );
   };
@@ -1425,7 +1497,7 @@ export default function App() {
       removedItemIds?: string[];
     }
   ) => {
-    setSchedules((prev) => {
+    updateActiveScheduleList((prev) => {
       let filtered = [...prev];
       if (options?.removedItemIds && options.removedItemIds.length > 0) {
         filtered = filtered.filter((item) => !options.removedItemIds?.includes(item.id));
@@ -1461,6 +1533,27 @@ export default function App() {
   };
 
   const handleResetToDefault = () => {
+    if (asasModeEnabled) {
+      if (window.confirm('Apakah Anda yakin ingin mengembalikan seluruh jadwal ASAS ke pengaturan awal (07:00 - 12:30)?')) {
+        setAudioSettings((prev) => ({
+          ...prev,
+          asasSchedules: DEFAULT_ASAS_SCHEDULES,
+        }));
+        const newLog: BellLog = {
+          id: `log-${Date.now()}`,
+          timestamp: Date.now(),
+          timeStr: format24HourTime(currentTime, false),
+          dayName: getIndonesianDayName(todayDayNum),
+          scheduleLabel: 'Reset Jadwal Standar ASAS',
+          triggerType: 'manual',
+          status: 'warning',
+          details: 'Memulihkan jadwal bel ASAS bawaan (07:00 - 12:30 WIB).',
+        };
+        setBellLogs((prev) => [newLog, ...prev.slice(0, 99)]);
+      }
+      return;
+    }
+
     if (window.confirm("Apakah Anda yakin ingin mengembalikan seluruh jadwal bel ke standar awal SD QUR'AN UNGGULAN?")) {
       setSchedules(INITIAL_SCHEDULES);
       const newLog: BellLog = {
@@ -1543,6 +1636,8 @@ export default function App() {
           onToggleFridayExtraOff={handleToggleFridayExtraOff}
           onUpdateFridayEarlyTime={handleUpdateFridayEarlyTime}
           onTriggerFridayEarlyDismissalNow={handleTriggerFridayEarlyDismissalNow}
+          asasModeEnabled={asasModeEnabled}
+          onToggleAsasMode={handleToggleAsasMode}
           bellPlayback={bellPlayback}
           onTogglePauseBell={togglePauseBellPlayback}
           onStopBell={stopAllBellAudio}
@@ -1551,7 +1646,7 @@ export default function App() {
         {/* Dynamic Tab Views */}
         {activeTab === 'schedule' && (
           <ScheduleList
-            schedules={schedules}
+            schedules={activeModeSchedules}
             selectedDay={selectedDay}
             audioSettings={audioSettings}
             disabledDays={disabledDays}
@@ -1573,6 +1668,7 @@ export default function App() {
             bellPlayback={bellPlayback}
             onTogglePauseBell={togglePauseBellPlayback}
             onStopBell={stopAllBellAudio}
+            asasModeEnabled={asasModeEnabled}
           />
         )}
 
@@ -1656,7 +1752,7 @@ export default function App() {
         onSave={handleSaveScheduleItem}
         editingItem={editingScheduleItem}
         audioSettings={audioSettings}
-        allSchedules={schedules}
+        allSchedules={activeModeSchedules}
         onTestSound={(
           chime,
           text,
@@ -1694,7 +1790,7 @@ export default function App() {
         isOpen={isAddExtraPeriodsOpen}
         onClose={() => setIsAddExtraPeriodsOpen(false)}
         selectedDay={selectedDay}
-        existingSchedules={schedules}
+        existingSchedules={activeModeSchedules}
         audioSettings={audioSettings}
         onAddBatchSchedules={handleBatchAddSchedules}
         onTestSound={(chime, text, enableOutro, outroType) => {
@@ -1717,8 +1813,14 @@ export default function App() {
       <ImportExportModal
         isOpen={isImportExportOpen}
         onClose={() => setIsImportExportOpen(false)}
-        schedules={schedules}
-        onImportSchedules={(newSchedules) => setSchedules(newSchedules)}
+        schedules={activeModeSchedules}
+        onImportSchedules={(newSchedules) => {
+          if (asasModeEnabled) {
+            setAudioSettings((prev) => ({ ...prev, asasSchedules: newSchedules }));
+          } else {
+            setSchedules(newSchedules);
+          }
+        }}
       />
 
       {/* Non-intrusive Cloud Login Diagnostic Toast (only visible when login fails, e.g. unauthorized Vercel domain) */}

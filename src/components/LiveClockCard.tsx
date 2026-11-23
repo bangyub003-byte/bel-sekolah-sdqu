@@ -38,6 +38,8 @@ interface LiveClockCardProps {
   onToggleFridayExtraOff?: () => void;
   onUpdateFridayEarlyTime?: (time: string) => void;
   onTriggerFridayEarlyDismissalNow?: () => void;
+  asasModeEnabled?: boolean;
+  onToggleAsasMode?: () => void;
   bellPlayback?: BellPlaybackState;
   onTogglePauseBell?: () => void;
   onStopBell?: () => void;
@@ -61,6 +63,8 @@ export const LiveClockCard: React.FC<LiveClockCardProps> = ({
   onToggleFridayExtraOff,
   onUpdateFridayEarlyTime,
   onTriggerFridayEarlyDismissalNow,
+  asasModeEnabled = false,
+  onToggleAsasMode,
   bellPlayback,
   onTogglePauseBell,
   onStopBell,
@@ -246,10 +250,15 @@ export const LiveClockCard: React.FC<LiveClockCardProps> = ({
               </div>
 
               <div className="min-w-0">
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <span className="text-[10px] font-black uppercase tracking-wider text-amber-800 bg-amber-100/90 px-2 py-0.5 rounded-full border border-amber-200">
                     Bel Sekolah Berikutnya
                   </span>
+                  {asasModeEnabled && (
+                    <span className="text-[10px] font-black uppercase tracking-wider text-indigo-800 bg-indigo-100 px-2 py-0.5 rounded-full border border-indigo-200">
+                      Mode ASAS
+                    </span>
+                  )}
                   <span className="text-[10px] text-slate-500 font-semibold">
                     Hari Ini ({getIndonesianDayName(todayDayNumber)})
                   </span>
@@ -367,6 +376,29 @@ export const LiveClockCard: React.FC<LiveClockCardProps> = ({
                 </span>
               </div>
               <div className="flex flex-wrap items-center gap-2 shrink-0">
+                {onToggleAsasMode && (
+                  <button
+                    type="button"
+                    onClick={onToggleAsasMode}
+                    title={
+                      asasModeEnabled
+                        ? 'Mode Bel Khusus ASAS sedang AKTIF. Klik untuk kembali ke jadwal normal.'
+                        : 'Klik untuk mengaktifkan Mode Bel Khusus ASAS (Asesmen Akhir Semester)'
+                    }
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all cursor-pointer flex items-center gap-1.5 ${
+                      asasModeEnabled
+                        ? 'bg-indigo-600 text-white border-indigo-600 hover:bg-indigo-700 shadow-xs'
+                        : 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'
+                    }`}
+                  >
+                    <span
+                      className={`w-2 h-2 rounded-full ${
+                        asasModeEnabled ? 'bg-emerald-300 animate-pulse' : 'bg-indigo-400'
+                      }`}
+                    />
+                    <span>{asasModeEnabled ? 'Mode ASAS: AKTIF' : 'Mode ASAS: Nonaktif'}</span>
+                  </button>
+                )}
                 {onToggleFridayExtraOff && (
                   <div className="relative" ref={fridayPopoverRef}>
                     <div
