@@ -11,6 +11,10 @@
  */
 
 import { getAudioBlobFromIDB, IDB_AUDIO_PREFIX } from './audioBlobStore';
+import {
+  getArrayBufferFromOfflineCache,
+  saveArrayBufferToOfflineCache,
+} from './offlineCache';
 
 let sharedAudioCtx: AudioContext | null = null;
 let currentSourceNode: AudioBufferSourceNode | null = null;
@@ -100,19 +104,41 @@ class AudioSourceValidationError extends Error {
  */
 export async function dataUrlToArrayBuffer(dataUrl: string): Promise<ArrayBuffer> {
   if (dataUrl.startsWith('http://') || dataUrl.startsWith('https://')) {
+    // Check offline CacheStorage first for instant playback & offline resilience
+    const cachedBuf = await getArrayBufferFromOfflineCache(dataUrl);
+    if (cachedBuf) {
+      return cachedBuf;
+    }
+
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      throw new Error('Offline: file audio cloud belum tersimpan di cache.');
+    }
+
     const isGoogleDrive =
       dataUrl.includes('drive.google.com') || dataUrl.includes('drive.usercontent.google.com');
+
+    const fetchWithTimeout = async (urlToFetch: string, timeoutMs = 8000) => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        return await fetch(urlToFetch, { signal: controller.signal });
+      } finally {
+        clearTimeout(timer);
+      }
+    };
 
     // For Google Drive, go straight through our proxy if available because Drive blocks browser CORS and uses redirects/HTML tokens
     if (!isGoogleDrive) {
       try {
-        const res = await fetch(dataUrl);
+        const res = await fetchWithTimeout(dataUrl, 8000);
         if (res.ok) {
           const contentType = (res.headers.get('content-type') || '').toLowerCase();
           if (contentType.includes('text/html')) {
             throw new AudioSourceValidationError('Link mengarah ke halaman web/HTML, bukan file audio langsung.');
           }
-          return await res.arrayBuffer();
+          const buf = await res.arrayBuffer();
+          saveArrayBufferToOfflineCache(dataUrl, buf, contentType || 'audio/mpeg');
+          return buf;
         }
       } catch (err) {
         if (err instanceof AudioSourceValidationError) throw err;
@@ -122,13 +148,15 @@ export async function dataUrlToArrayBuffer(dataUrl: string): Promise<ArrayBuffer
 
     // Try server-side proxy endpoint (/api/audio/proxy)
     try {
-      const proxyRes = await fetch(`/api/audio/proxy?url=${encodeURIComponent(dataUrl)}`);
+      const proxyRes = await fetchWithTimeout(`/api/audio/proxy?url=${encodeURIComponent(dataUrl)}`, 9000);
       if (proxyRes.ok) {
         const contentType = (proxyRes.headers.get('content-type') || '').toLowerCase();
         if (contentType.includes('application/json') || contentType.includes('text/html')) {
           throw new AudioSourceValidationError('Sumber tautan bukan berkas audio yang valid.');
         }
-        return await proxyRes.arrayBuffer();
+        const buf = await proxyRes.arrayBuffer();
+        saveArrayBufferToOfflineCache(dataUrl, buf, contentType || 'audio/mpeg');
+        return buf;
       }
 
       if (proxyRes.status === 400 || proxyRes.status === 403 || proxyRes.status === 413 || proxyRes.status === 422 || proxyRes.status === 502) {

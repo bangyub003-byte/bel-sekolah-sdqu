@@ -60,6 +60,12 @@ import { ManualBellPad } from './components/ManualBellPad';
 import { BellLogs } from './components/BellLogs';
 import { ImportExportModal } from './components/ImportExportModal';
 import { ChimeManager } from './components/ChimeManager';
+import { PWAInstallButton } from './components/PWAInstallButton';
+import { OfflineIndicator } from './components/OfflineIndicator';
+import {
+  fetchAndCacheExternalAudio,
+  getBlobUrlFromOfflineCache,
+} from './utils/offlineCache';
 
 const LOCAL_STORAGE_KEY_SCHEDULES = 'sd_quran_schedules_v1';
 const LOCAL_STORAGE_KEY_SETTINGS = 'sd_quran_settings_v1';
@@ -170,6 +176,7 @@ export default function App() {
   }, []);
 
   const murottalAudioRef = useRef<HTMLAudioElement | null>(null);
+  const murottalObjectUrlRef = useRef<string | null>(null);
   const firedMurottalKeysRef = useRef<Set<string>>(new Set());
   const isFadingMurottalRef = useRef<boolean>(false);
   const fadeIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -1014,15 +1021,15 @@ export default function App() {
 
   fadeOutAndStopMurottalRef.current = fadeOutAndStopMurottal;
 
-  // Murottal Audio Controls
-  const handlePlayMurottalTrack = (track: MurottalTrack) => {
+  // Murottal Audio Controls (with transparent offline CacheStorage support)
+  const handlePlayMurottalTrack = async (track: MurottalTrack) => {
     try {
       clearMurottalFade();
       fadeTargetBellKeyRef.current = null;
       setActiveMurottalTrack(track);
       setIsAudioUnlocked(true);
 
-      // Unlock Audio Context if suspended
+      // Unlock Audio Context immediately within user gesture before async cache check
       const ctx = getAudioContext();
       if (ctx.state === 'suspended') {
         ctx.resume().catch(() => {});
@@ -1033,10 +1040,26 @@ export default function App() {
         murottalAudioRef.current.removeAttribute('src');
         murottalAudioRef.current.load();
       }
+      if (murottalObjectUrlRef.current) {
+        URL.revokeObjectURL(murottalObjectUrlRef.current);
+        murottalObjectUrlRef.current = null;
+      }
+
+      let resolvedSrc = track.audioUrl;
+      if (track.audioUrl.startsWith('http://') || track.audioUrl.startsWith('https://')) {
+        const cachedBlobUrl = await getBlobUrlFromOfflineCache(track.audioUrl);
+        if (cachedBlobUrl) {
+          murottalObjectUrlRef.current = cachedBlobUrl;
+          resolvedSrc = cachedBlobUrl;
+        } else if (typeof navigator === 'undefined' || navigator.onLine !== false) {
+          // Cache in background for offline resilience
+          fetchAndCacheExternalAudio(track.audioUrl).catch(() => {});
+        }
+      }
 
       const audio = new Audio();
       audio.preload = 'auto';
-      audio.src = track.audioUrl;
+      audio.src = resolvedSrc;
       audio.volume = Math.max(0, Math.min(1.0, murottalConfig.volume));
       murottalAudioRef.current = audio;
 
@@ -1606,6 +1629,13 @@ export default function App() {
         onCloudLogin={handleCloudLogin}
         onCloudLogout={handleCloudLogout}
         onForcePushCloud={handleForcePushCloud}
+        pwaInstallNode={
+          <PWAInstallButton
+            schedules={schedules}
+            audioSettings={audioSettings}
+            murottalConfig={murottalConfig}
+          />
+        }
       />
 
       {/* Main Container */}
@@ -1879,6 +1909,9 @@ export default function App() {
           )}
         </div>
       )}
+
+      {/* Offline Connectivity Indicator */}
+      <OfflineIndicator />
     </div>
   );
 }

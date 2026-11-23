@@ -32,6 +32,7 @@ interface NavbarProps {
   onCloudLogin?: () => void;
   onCloudLogout?: () => void;
   onForcePushCloud?: () => void;
+  pwaInstallNode?: React.ReactNode;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -46,6 +47,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onCloudLogin,
   onCloudLogout,
   onForcePushCloud,
+  pwaInstallNode,
 }) => {
   const [isMenuCollapsed, setIsMenuCollapsed] = useState(false);
 
@@ -137,6 +139,9 @@ export const Navbar: React.FC<NavbarProps> = ({
                 </button>
               )
             )}
+
+            {/* Compact Offline / PWA App Install & Auto-Start Pill */}
+            {pwaInstallNode}
           </div>
         </div>
       </div>

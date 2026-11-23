@@ -5,6 +5,13 @@ import {
   pauseCustomAudio,
   resumeCustomAudio,
 } from './universalAudioPlayer';
+import {
+  buildTtsCacheKeyUrl,
+  getDataUrlAudioFromOfflineCache,
+  getTranslationOffline,
+  saveDataUrlAudioToOfflineCache,
+  saveTranslationOffline,
+} from './offlineCache';
 
 export interface BellPlaybackState {
   isPlaying: boolean;
@@ -615,10 +622,21 @@ export async function translateSpeechWithAI(
     return clientTranslateCache.get(cacheKey)!;
   }
 
+  // Check persistent offline localStorage translation cache
+  const offlineTranslated = getTranslationOffline(targetLanguage, text);
+  if (offlineTranslated) {
+    clientTranslateCache.set(cacheKey, offlineTranslated);
+    return offlineTranslated;
+  }
+
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    return null;
+  }
+
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 14000);
+      const timeoutId = setTimeout(() => controller.abort(), 7000);
 
       const res = await fetch('/api/voice/translate', {
         method: 'POST',
@@ -636,6 +654,7 @@ export async function translateSpeechWithAI(
       const data = await res.json();
       if (data.status === 'success' && data.translatedText) {
         clientTranslateCache.set(cacheKey, data.translatedText);
+        saveTranslationOffline(targetLanguage, text, data.translatedText);
         return data.translatedText;
       }
     } catch (_err) {
@@ -701,14 +720,22 @@ export async function generateClonedTTSAudio(
     return clientTtsCache.get(cacheKey)!;
   }
 
-  // Temporary 60s cooldown if rate limited
-  if (getIsAiTtsQuotaExceeded()) {
+  // Check persistent CacheStorage offline audio cache so previously synthesized AI voices still work offline
+  const persistentCacheUrl = buildTtsCacheKeyUrl(voiceName, language, text);
+  const offlineCachedAudio = await getDataUrlAudioFromOfflineCache(persistentCacheUrl);
+  if (offlineCachedAudio) {
+    clientTtsCache.set(cacheKey, offlineCachedAudio);
+    return offlineCachedAudio;
+  }
+
+  // When offline or in temporary 429 cooldown, skip slow network wait and use offline SpeechSynthesis immediately
+  if ((typeof navigator !== 'undefined' && navigator.onLine === false) || getIsAiTtsQuotaExceeded()) {
     return null;
   }
 
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 15000);
+    const timeoutId = setTimeout(() => controller.abort(), 7000);
 
     const res = await fetch('/api/voice/clone-tts', {
       method: 'POST',
@@ -740,6 +767,8 @@ export async function generateClonedTTSAudio(
 
     if (data.status === 'success' && data.audioDataUrl) {
       clientTtsCache.set(cacheKey, data.audioDataUrl);
+      // Persist asynchronously in CacheStorage for offline use
+      saveDataUrlAudioToOfflineCache(persistentCacheUrl, data.audioDataUrl);
       return data.audioDataUrl;
     }
     return null;

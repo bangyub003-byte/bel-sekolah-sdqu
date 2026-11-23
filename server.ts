@@ -1,4 +1,5 @@
 import express from "express";
+import http from "http";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, ThinkingLevel } from "@google/genai";
@@ -33,6 +34,7 @@ function wrapPcmInWav(pcmBuffer: Buffer, sampleRate = 24000, numChannels = 1, bi
 
 async function startServer() {
   const app = express();
+  const httpServer = http.createServer(app);
   const PORT = 3000;
 
   app.use(express.json({ limit: "25mb" }));
@@ -534,7 +536,10 @@ async function startServer() {
   // Vite middleware in development mode
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: { server: httpServer },
+      },
       appType: "spa",
     });
     app.use(vite.middlewares);
@@ -546,7 +551,7 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
+  httpServer.listen(PORT, "0.0.0.0", () => {
     console.log(`[BEL SEKOLAH SD QUR'AN UNGGULAN] Server running on http://0.0.0.0:${PORT}`);
   });
 }

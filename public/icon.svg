@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#1D4ED8" />
+      <stop offset="55%" stop-color="#2563EB" />
+      <stop offset="100%" stop-color="#0284C7" />
+    </linearGradient>
+    <linearGradient id="bellGrad" x1="256" y1="112" x2="256" y2="392" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFFFFF" />
+      <stop offset="100%" stop-color="#E0F2FE" />
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bgGrad)" />
+  <circle cx="256" cy="256" r="196" fill="#FFFFFF" fill-opacity="0.08" />
+  <path d="M132 192C112 224 112 276 132 308" stroke="#FCD34D" stroke-width="18" stroke-linecap="round" />
+  <path d="M98 164C70 214 70 286 98 336" stroke="#FCD34D" stroke-opacity="0.65" stroke-width="16" stroke-linecap="round" />
+  <path d="M380 192C400 224 400 276 380 308" stroke="#FCD34D" stroke-width="18" stroke-linecap="round" />
+  <path d="M414 164C442 214 442 286 414 336" stroke="#FCD34D" stroke-opacity="0.65" stroke-width="16" stroke-linecap="round" />
+  <path d="M256 108C242.745 108 232 118.745 232 132V140.4C185.8 151.1 152 192.4 152 242V302L126 336C121.4 342 125.7 350 133.2 350H378.8C386.3 350 390.6 342 386 336L360 302V242C360 192.4 326.2 151.1 280 140.4V132C280 118.745 269.255 108 256 108Z" fill="url(#bellGrad)" />
+  <path d="M216 364C220.8 383.5 236.9 396 256 396C275.1 396 291.2 383.5 296 364H216Z" fill="#FCD34D" />
+</svg>

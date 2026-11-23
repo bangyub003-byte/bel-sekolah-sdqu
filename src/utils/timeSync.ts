@@ -7,11 +7,30 @@ let lastSyncTime: number | null = null;
  * Perform high-precision time synchronization with server API / external NTP endpoint
  */
 export async function syncTimeWithAPI(): Promise<{ offsetMs: number; latencyMs: number; source: string }> {
+  // Fast fail-over when browser is completely offline
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    return {
+      offsetMs: currentOffsetMs,
+      latencyMs: 0,
+      source: 'Jam Komputer Lokal (Mode Offline)',
+    };
+  }
+
+  const fetchWithTimeout = async (url: string, timeoutMs = 3000) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await fetch(url, { cache: 'no-store', signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
   const tRequest = Date.now();
 
   try {
     // Try primary server endpoint /api/time
-    const response = await fetch('/api/time', { cache: 'no-store' });
+    const response = await fetchWithTimeout('/api/time', 3000);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
     const data = await response.json();
@@ -28,13 +47,11 @@ export async function syncTimeWithAPI(): Promise<{ offsetMs: number; latencyMs: 
       latencyMs,
       source: 'Server API (/api/time)',
     };
-  } catch (err) {
-    console.warn('Primary /api/time sync failed, trying public NTP API fallback:', err);
-
+  } catch {
     // Fallback sync with public WorldTimeAPI
     try {
       const fbReq = Date.now();
-      const fbResp = await fetch('https://worldtimeapi.org/api/timezone/Asia/Jakarta', { cache: 'no-store' });
+      const fbResp = await fetchWithTimeout('https://worldtimeapi.org/api/timezone/Asia/Jakarta', 3000);
       if (fbResp.ok) {
         const fbData = await fbResp.json();
         const fbRespTime = Date.now();
@@ -50,15 +67,15 @@ export async function syncTimeWithAPI(): Promise<{ offsetMs: number; latencyMs: 
           source: 'WorldTimeAPI (Asia/Jakarta)',
         };
       }
-    } catch (fbErr) {
-      console.warn('Public NTP API fallback also failed:', fbErr);
+    } catch {
+      // Offline or unreachable
     }
 
-    // Default to zero offset if completely offline
+    // Default to local device clock if offline / slow network
     return {
       offsetMs: currentOffsetMs,
       latencyMs: 0,
-      source: 'Local Device Clock (Offline)',
+      source: 'Jam Komputer Lokal (Mode Offline)',
     };
   }
 }
