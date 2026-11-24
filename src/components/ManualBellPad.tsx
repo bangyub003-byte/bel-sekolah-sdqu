@@ -123,6 +123,9 @@ export const ManualBellPad: React.FC<ManualBellPadProps> = ({
 
     const fullText = `${audioSettings.globalPrefix}${preset.speechText}`;
 
+    const now = new Date();
+    const currentHHMM = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
     try {
       await playBellSequence(
         preset.chime,
@@ -139,7 +142,7 @@ export const ManualBellPad: React.FC<ManualBellPadProps> = ({
         'id',
         'auto_translate',
         undefined,
-        { label: preset.title, skipPostBellTracks: true }
+        { label: preset.title, scheduleTime: currentHHMM, skipPostBellTracks: true }
       );
       onLogManualBell(`Bel Manual: ${preset.title}`, fullText);
     } catch (err) {
@@ -186,6 +189,9 @@ export const ManualBellPad: React.FC<ManualBellPadProps> = ({
         }
       }
 
+      const now = new Date();
+      const currentHHMM = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
       await playBellSequence(
         customChime,
         fullText,
@@ -201,7 +207,11 @@ export const ManualBellPad: React.FC<ManualBellPadProps> = ({
         customLanguage,
         customInputMode,
         resolvedTargetText,
-        { label: `Siaran Manual (${customLanguage.toUpperCase()})`, skipPostBellTracks: true }
+        {
+          label: `Siaran Manual (${customLanguage.toUpperCase()})`,
+          scheduleTime: currentHHMM,
+          skipPostBellTracks: true,
+        }
       );
       onLogManualBell(`Bel Manual Custom (${customLanguage.toUpperCase()})`, resolvedTargetText || fullText);
       setCustomText('');

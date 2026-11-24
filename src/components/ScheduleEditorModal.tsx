@@ -56,7 +56,8 @@ interface ScheduleEditorModalProps {
     outroChimeType?: ChimeType | 'none' | 'same_as_intro',
     speechLanguage?: SpeechLanguage,
     speechInputMode?: SpeechInputMode,
-    translatedSpeechText?: string
+    translatedSpeechText?: string,
+    scheduleTime?: string
   ) => void | Promise<void>;
 }
 
@@ -766,7 +767,8 @@ export const ScheduleEditorModal: React.FC<ScheduleEditorModalProps> = ({
                           outroChimeType,
                           speechLanguage,
                           speechInputMode,
-                          effectiveTranslation
+                          effectiveTranslation,
+                          time
                         );
                       } finally {
                         setIsPlayingTest(false);

@@ -12,6 +12,10 @@ import {
   saveDataUrlAudioToOfflineCache,
   saveTranslationOffline,
 } from './offlineCache';
+import {
+  formatSpokenIndonesianTime,
+  resolveTimeAnnouncementConfig,
+} from './timeSpeech';
 
 export interface BellPlaybackState {
   isPlaying: boolean;
@@ -1016,6 +1020,7 @@ export interface PlayBellSequenceOptions {
   label?: string;
   scheduleId?: string;
   scheduleTime?: string;
+  skipTimeAnnouncement?: boolean;
   skipPostBellTracks?: boolean;
   fallbackMatchScheduleIds?: string[];
   fallbackMatchTimes?: string[];
@@ -1109,6 +1114,17 @@ export async function playBellSequence(
     const useStandardMaleAi = audioType === 'tts' && settings.enableTTS !== false;
     const shouldGenerateAiAudio = audioType === 'cloned' || useMultilingualAi || useStandardMaleAi;
 
+    const timeAnnouncementText =
+      !options?.skipTimeAnnouncement && options?.scheduleTime
+        ? formatSpokenIndonesianTime(options.scheduleTime)
+        : '';
+    const timeAnnouncementConfig = resolveTimeAnnouncementConfig(
+      audioType,
+      speechLanguage,
+      settings,
+      clonedVoiceId
+    );
+
     // Resolve final spoken text and prefetch AI audio CONCURRENTLY while the intro chime rings
     let resolvedSpokenText = fullText;
     const prepareTextAndAudioPromise = (async (): Promise<{
@@ -1162,6 +1178,23 @@ export async function playBellSequence(
       return { spokenText: textToSpeak, aiAudioUrl: null };
     })();
 
+    const prepareTimeAudioPromise = (async (): Promise<string | null> => {
+      if (!timeAnnouncementText || !timeAnnouncementConfig.shouldAnnounceTime) {
+        return null;
+      }
+      try {
+        return await generateClonedTTSAudio(
+          timeAnnouncementText,
+          undefined,
+          timeAnnouncementConfig.voiceName,
+          timeAnnouncementConfig.voiceDescription,
+          'id'
+        );
+      } catch {
+        return null;
+      }
+    })();
+
     // Step 1: Play Intro Chime ONCE
     if (actualChimeType !== 'none') {
       await playChimeTone(actualChimeType, combinedVolume, settings.customChimes, customChimeUrl);
@@ -1173,12 +1206,39 @@ export async function playBellSequence(
     await delaySequence(250, seqId);
     if (seqId !== activeBellSequenceId) return;
 
-    const prepared = await prepareTextAndAudioPromise;
+    const [prepared, preparedTimeAudioUrl] = await Promise.all([
+      prepareTextAndAudioPromise,
+      prepareTimeAudioPromise,
+    ]);
     await waitIfPaused(seqId);
     if (seqId !== activeBellSequenceId) return;
     resolvedSpokenText = prepared.spokenText;
 
     setBellPlaybackState({ phase: 'speech' });
+
+    // Announce current schedule time first ("Sekarang pukul ...") before reading the main announcement text
+    if (timeAnnouncementText && timeAnnouncementConfig.shouldAnnounceTime) {
+      let timePlayed = false;
+      if (preparedTimeAudioUrl) {
+        timePlayed = await playCustomAudio(preparedTimeAudioUrl, speechVolume);
+        await waitIfPaused(seqId);
+        if (seqId !== activeBellSequenceId) return;
+      }
+      if (!timePlayed && seqId === activeBellSequenceId) {
+        await speakTTS(
+          timeAnnouncementText,
+          settings,
+          timeAnnouncementConfig.voiceName,
+          true,
+          'id'
+        );
+        await waitIfPaused(seqId);
+        if (seqId !== activeBellSequenceId) return;
+      }
+
+      await delaySequence(250, seqId);
+      if (seqId !== activeBellSequenceId) return;
+    }
 
     // Step 2: Play Voice (Direct Audio Recording, AI Cloned/Multilingual Voice, or Male AI TTS)
     if (audioType === 'recording' && customAudioUrl) {

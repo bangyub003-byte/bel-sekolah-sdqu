@@ -3,6 +3,10 @@ import { DEFAULT_JUZ_30_TRACKS } from '../data/defaultMurottal';
 import { DEFAULT_ASAS_SCHEDULES } from '../data/asasSchedule';
 import { buildFridayEarlyDismissalSchedule } from './fridaySchedule';
 import { getCustomMurottalTracks } from './murottalStorage';
+import {
+  formatSpokenIndonesianTime,
+  resolveTimeAnnouncementConfig,
+} from './timeSpeech';
 
 export const OFFLINE_AUDIO_CACHE_NAME = 'sd-quran-offline-audio-v1';
 const TRANSLATE_CACHE_STORAGE_KEY = 'sd_quran_ai_translate_cache_v1';
@@ -810,9 +814,37 @@ export function collectScheduleTtsTargets(
 
   for (const item of allItems) {
     const audioType = item.audioType || 'tts';
+    const speechLanguage: SpeechLanguage = item.speechLanguage || 'id';
+
+    // Collect current-time announcement ("Sekarang pukul ...") for every scheduled bell
+    const spokenTimeText = formatSpokenIndonesianTime(item.time);
+    const timeConfig = resolveTimeAnnouncementConfig(
+      audioType,
+      speechLanguage,
+      audioSettings,
+      item.clonedVoiceId
+    );
+    if (spokenTimeText && timeConfig.shouldAnnounceTime) {
+      const timeCacheKeyUrl = buildTtsCacheKeyUrl(
+        timeConfig.voiceName,
+        'id',
+        spokenTimeText
+      );
+      if (!dedupeMap.has(timeCacheKeyUrl)) {
+        dedupeMap.set(timeCacheKeyUrl, {
+          label: `Jam ${item.time}`,
+          voiceName: timeConfig.voiceName,
+          language: 'id',
+          sourceText: spokenTimeText,
+          resolvedText: spokenTimeText,
+          needsTranslation: false,
+          cacheKeyUrl: timeCacheKeyUrl,
+        });
+      }
+    }
+
     if (audioType === 'recording') continue;
 
-    const speechLanguage: SpeechLanguage = item.speechLanguage || 'id';
     const useMultilingualAi = speechLanguage !== 'id';
     const useStandardMaleAi = audioType === 'tts' && audioSettings.enableTTS !== false;
     const shouldGenerateAiAudio = audioType === 'cloned' || useMultilingualAi || useStandardMaleAi;

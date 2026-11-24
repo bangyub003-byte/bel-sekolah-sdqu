@@ -1685,6 +1685,7 @@ export default function App() {
 
     await playBellSequence('westminster', testText, audioSettings, 1.0, undefined, 'tts', undefined, undefined, undefined, undefined, undefined, 'id', 'auto_translate', undefined, {
       label: 'Tes Bell Seketika',
+      scheduleTime: format24HourTime(currentTime, false),
       skipPostBellTracks: true,
     });
   };
@@ -2136,7 +2137,8 @@ export default function App() {
           outroType,
           speechLanguage,
           speechInputMode,
-          translatedSpeechText
+          translatedSpeechText,
+          scheduleTime
         ) => {
           const full = `${audioSettings.globalPrefix}${text}`;
           return playBellSequence(
@@ -2153,7 +2155,8 @@ export default function App() {
             undefined,
             speechLanguage || 'id',
             speechInputMode || 'auto_translate',
-            translatedSpeechText
+            translatedSpeechText,
+            scheduleTime ? { scheduleTime } : undefined
           );
         }}
       />
