@@ -75,6 +75,43 @@ const LOCAL_STORAGE_KEY_SCHEDULES = 'sd_quran_schedules_v1';
 const LOCAL_STORAGE_KEY_SETTINGS = 'sd_quran_settings_v1';
 const LOCAL_STORAGE_KEY_LOGS = 'sd_quran_logs_v1';
 const LOCAL_STORAGE_KEY_MUROTTAL = 'sd_quran_murottal_v1';
+const LOCAL_STORAGE_KEY_MUROTTAL_PROGRESS = 'sd_quran_murottal_progress_v1';
+
+interface MurottalProgressStorage {
+  lastPlayedTrackId?: string;
+  nextTrackId?: string;
+  slotProgress?: Record<
+    string,
+    {
+      configuredStartTrackId: string;
+      resumeTrackId: string;
+      updatedAt: number;
+    }
+  >;
+}
+
+function readMurottalProgressStorage(): MurottalProgressStorage {
+  try {
+    const raw = localStorage.getItem(LOCAL_STORAGE_KEY_MUROTTAL_PROGRESS);
+    if (raw) return JSON.parse(raw) as MurottalProgressStorage;
+  } catch {}
+  return {};
+}
+
+function writeMurottalProgressStorage(data: MurottalProgressStorage): void {
+  try {
+    localStorage.setItem(LOCAL_STORAGE_KEY_MUROTTAL_PROGRESS, JSON.stringify(data));
+  } catch {}
+}
+
+interface MurottalPlaybackOptions {
+  preserveScheduleSession?: boolean;
+  scheduledSlotContext?: {
+    slotId: string;
+    configuredStartTrackId: string;
+    endAtMs: number | null;
+  };
+}
 
 export default function App() {
   // Navigation tab state ('schedule' | 'murottal' | 'chimes' | 'manual' | 'time-sync' | 'voice' | 'logs')
@@ -186,6 +223,9 @@ export default function App() {
   const pendingMurottalRetryCleanupRef = useRef<(() => void) | null>(null);
   const murottalObjectUrlRef = useRef<string | null>(null);
   const firedMurottalKeysRef = useRef<Set<string>>(new Set());
+  const activeMurottalEndAtRef = useRef<number | null>(null);
+  const activeMurottalSlotRef = useRef<{ slotId: string; configuredStartTrackId: string } | null>(null);
+  const consecutiveMurottalErrorsRef = useRef<number>(0);
   const isFadingMurottalRef = useRef<boolean>(false);
   const fadeIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const fadeTargetBellKeyRef = useRef<string | null>(null);
@@ -223,7 +263,7 @@ export default function App() {
   const audioSettingsRef = useRef<AudioSettings>(audioSettings);
   const murottalConfigRef = useRef<MurottalConfig>(murottalConfig);
   const triggerAutomaticBellRef = useRef<(item: ScheduleItem, dayNum: DayOfWeek) => Promise<void>>(async () => {});
-  const handlePlayMurottalTrackRef = useRef<(track: MurottalTrack) => void>(() => {});
+  const handlePlayMurottalTrackRef = useRef<(track: MurottalTrack, options?: MurottalPlaybackOptions) => void>(() => {});
   const fadeOutAndStopMurottalRef = useRef<(durationMs?: number) => Promise<void>>(async () => {});
 
   const isInitialSchedulesMountRef = useRef<boolean>(true);
@@ -912,14 +952,46 @@ export default function App() {
                 firedMurottalKeysRef.current.add(mKey);
               }
               const allKnownTracks = [
-                ...customMurottalTracksRef.current,
                 ...DEFAULT_JUZ_30_TRACKS,
+                ...customMurottalTracksRef.current,
               ];
+              const configuredStartTrackId =
+                (slot.trackId && allKnownTracks.some((t) => t.id === slot.trackId)
+                  ? slot.trackId
+                  : null) ||
+                (currentMurottal.selectedTrackId &&
+                allKnownTracks.some((t) => t.id === currentMurottal.selectedTrackId)
+                  ? currentMurottal.selectedTrackId
+                  : null) ||
+                DEFAULT_JUZ_30_TRACKS[1].id;
+
+              // Check saved sequential position in localStorage: continue sequentially next day unless user picked a different starting track
+              const savedProgress = readMurottalProgressStorage();
+              const slotSaved = savedProgress.slotProgress?.[slot.id];
+              const resumeId =
+                slotSaved &&
+                slotSaved.configuredStartTrackId === configuredStartTrackId &&
+                allKnownTracks.some((t) => t.id === slotSaved.resumeTrackId)
+                  ? slotSaved.resumeTrackId
+                  : configuredStartTrackId;
+
               const targetTrack =
-                (slot.trackId && allKnownTracks.find((t) => t.id === slot.trackId)) ||
-                allKnownTracks.find((t) => t.id === currentMurottal.selectedTrackId) ||
+                allKnownTracks.find((t) => t.id === resumeId) ||
+                allKnownTracks.find((t) => t.id === configuredStartTrackId) ||
                 DEFAULT_JUZ_30_TRACKS[1];
-              handlePlayMurottalTrackRef.current(targetTrack);
+
+              const endAtMs =
+                slot.stopAfterMinutes && slot.stopAfterMinutes > 0
+                  ? now.getTime() + slot.stopAfterMinutes * 60 * 1000
+                  : null;
+
+              handlePlayMurottalTrackRef.current(targetTrack, {
+                scheduledSlotContext: {
+                  slotId: slot.id,
+                  configuredStartTrackId,
+                  endAtMs,
+                },
+              });
 
               // Add audit log
               const newLog: BellLog = {
@@ -930,12 +1002,27 @@ export default function App() {
                 scheduleLabel: slot.label || `Murottal Otomatis: ${targetTrack.title}`,
                 triggerType: 'auto',
                 status: 'success',
-                details: `Pemutaran murottal otomatis jam ${currentHHMM} WIB (${targetTrack.reciter}).`,
+                details: `Pemutaran murottal otomatis jam ${currentHHMM} WIB (${targetTrack.title} - ${targetTrack.reciter}).`,
               };
               setBellLogs((prev) => [newLog, ...prev.slice(0, 99)]);
             }
           }
         });
+
+        // 1a. End-of-Slot Smooth Fade-Out (when scheduled stopAfterMinutes expires)
+        if (
+          activeMurottalEndAtRef.current !== null &&
+          murottalAudioRef.current &&
+          !murottalAudioRef.current.paused &&
+          !isFadingMurottalRef.current
+        ) {
+          const msRemaining = activeMurottalEndAtRef.current - now.getTime();
+          if (msRemaining <= 5000) {
+            activeMurottalEndAtRef.current = null;
+            const fadeMs = Math.max(1500, Math.min(5000, msRemaining > 0 ? msRemaining : 2500));
+            fadeOutAndStopMurottalRef.current(fadeMs);
+          }
+        }
 
         // 1b. Pre-Bell Smooth Murottal Fade-Out (~9s before any scheduled bell such as 07:00)
         // Ensures Qur'an recitation fades out gently & stops completely BEFORE the bell strikes
@@ -965,6 +1052,7 @@ export default function App() {
               !firedMinutesRef.current.has(upcomingBellKey) &&
               fadeTargetBellKeyRef.current !== upcomingBellKey
             ) {
+              activeMurottalEndAtRef.current = null;
               fadeTargetBellKeyRef.current = upcomingBellKey;
               const fadeDurationMs = Math.max(1500, Math.round((diffSecs - 0.8) * 1000));
               fadeOutAndStopMurottalRef.current(fadeDurationMs);
@@ -1085,12 +1173,26 @@ export default function App() {
 
   fadeOutAndStopMurottalRef.current = fadeOutAndStopMurottal;
 
-  // Murottal Audio Controls (Offline-first: CacheStorage -> IndexedDB -> Online Stream, with persistent unlocked audio element)
-  const handlePlayMurottalTrack = async (track: MurottalTrack) => {
+  // Murottal Audio Controls (Offline-first: CacheStorage -> IndexedDB -> Online Stream, with sequential Juz 30 progression)
+  const handlePlayMurottalTrack = async (
+    track: MurottalTrack,
+    options?: MurottalPlaybackOptions
+  ) => {
     isMurottalStartingRef.current = true;
     try {
       clearMurottalFade();
       fadeTargetBellKeyRef.current = null;
+      if (options?.scheduledSlotContext) {
+        activeMurottalSlotRef.current = {
+          slotId: options.scheduledSlotContext.slotId,
+          configuredStartTrackId: options.scheduledSlotContext.configuredStartTrackId,
+        };
+        activeMurottalEndAtRef.current = options.scheduledSlotContext.endAtMs;
+      } else if (!options?.preserveScheduleSession) {
+        activeMurottalSlotRef.current = null;
+        activeMurottalEndAtRef.current = null;
+      }
+
       if (pendingMurottalRetryCleanupRef.current) {
         pendingMurottalRetryCleanupRef.current();
         pendingMurottalRetryCleanupRef.current = null;
@@ -1127,6 +1229,75 @@ export default function App() {
       let resolvedSrc = exactAudioUrl;
       const isOffline = typeof navigator !== 'undefined' && navigator.onLine === false;
 
+      const getOrderedPlaylist = (): MurottalTrack[] => [
+        ...DEFAULT_JUZ_30_TRACKS,
+        ...customMurottalTracksRef.current,
+      ];
+
+      const persistProgressForTrack = (playedTrack: MurottalTrack) => {
+        const playlist = getOrderedPlaylist();
+        const idx = playlist.findIndex((t) => t.id === playedTrack.id);
+        const nextIdx = idx >= 0 ? (idx + 1) % playlist.length : 1;
+        const nextTrackId =
+          murottalConfigRef.current.repeatMode === 'repeat_one'
+            ? playedTrack.id
+            : playlist[nextIdx]?.id || DEFAULT_JUZ_30_TRACKS[1].id;
+        const prevProgress = readMurottalProgressStorage();
+        const nextProgress: MurottalProgressStorage = {
+          ...prevProgress,
+          lastPlayedTrackId: playedTrack.id,
+          nextTrackId,
+        };
+        if (activeMurottalSlotRef.current) {
+          nextProgress.slotProgress = {
+            ...(prevProgress.slotProgress || {}),
+            [activeMurottalSlotRef.current.slotId]: {
+              configuredStartTrackId: activeMurottalSlotRef.current.configuredStartTrackId,
+              resumeTrackId: nextTrackId,
+              updatedAt: Date.now(),
+            },
+          };
+        }
+        writeMurottalProgressStorage(nextProgress);
+      };
+
+      const advanceToNextTrack = async () => {
+        if (activeMurottalEndAtRef.current !== null && Date.now() >= activeMurottalEndAtRef.current) {
+          activeMurottalEndAtRef.current = null;
+          activeMurottalSlotRef.current = null;
+          setIsMurottalPlaying(false);
+          return;
+        }
+
+        const playlist = getOrderedPlaylist();
+        const currentIndex = playlist.findIndex((t) => t.id === track.id);
+        const startIdx = currentIndex >= 0 ? currentIndex : 0;
+
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+          // While offline, advance sequentially to the next cached track in order (e.g. 001 -> 078 -> 079 -> ... -> 114)
+          for (let offset = 1; offset <= playlist.length; offset++) {
+            const candidate = playlist[(startIdx + offset) % playlist.length];
+            const cUrl = (candidate.audioUrl || '').trim();
+            const isLocal = cUrl.startsWith('data:') || cUrl.startsWith(IDB_AUDIO_PREFIX);
+            const isCached = isLocal || (await isExternalAudioCachedAndValid(cUrl));
+            if (isCached) {
+              if (candidate.id === track.id) {
+                audio.currentTime = 0;
+                audio.play().catch(() => {});
+              } else {
+                handlePlayMurottalTrack(candidate, { preserveScheduleSession: true });
+              }
+              return;
+            }
+          }
+          setIsMurottalPlaying(false);
+          return;
+        }
+
+        const nextIndex = (startIdx + 1) % playlist.length;
+        handlePlayMurottalTrack(playlist[nextIndex], { preserveScheduleSession: true });
+      };
+
       if (exactAudioUrl.startsWith('http://') || exactAudioUrl.startsWith('https://')) {
         // Priority 1: Search Cache Storage & IndexedDB offline store using the EXACT URL key
         const cachedBlobUrl = await getBlobUrlFromOfflineCache(exactAudioUrl);
@@ -1135,6 +1306,14 @@ export default function App() {
           resolvedSrc = cachedBlobUrl;
         } else if (isOffline) {
           console.warn('Murottal belum tersimpan di cache offline:', exactAudioUrl);
+          if (
+            (options?.scheduledSlotContext || options?.preserveScheduleSession) &&
+            consecutiveMurottalErrorsRef.current < 38
+          ) {
+            consecutiveMurottalErrorsRef.current++;
+            await advanceToNextTrack();
+            return;
+          }
           setIsMurottalPlaying(false);
           return;
         } else {
@@ -1160,12 +1339,25 @@ export default function App() {
       murottalAudioRef.current = audio;
 
       audio.onplay = () => {
+        consecutiveMurottalErrorsRef.current = 0;
         setIsMurottalPlaying(true);
         setIsAudioUnlocked(true);
+        persistProgressForTrack(track);
       };
 
       audio.onerror = (e) => {
         console.warn('Murottal audio load error:', e, 'URL:', exactAudioUrl);
+        if (
+          !isFadingMurottalRef.current &&
+          (activeMurottalSlotRef.current || options?.preserveScheduleSession) &&
+          consecutiveMurottalErrorsRef.current < 5
+        ) {
+          consecutiveMurottalErrorsRef.current++;
+          setTimeout(() => {
+            advanceToNextTrack().catch(() => setIsMurottalPlaying(false));
+          }, 300);
+          return;
+        }
         setIsMurottalPlaying(false);
       };
 
@@ -1176,38 +1368,18 @@ export default function App() {
           return;
         }
         if (murottalConfigRef.current.repeatMode === 'repeat_one') {
+          if (activeMurottalEndAtRef.current !== null && Date.now() >= activeMurottalEndAtRef.current) {
+            activeMurottalEndAtRef.current = null;
+            activeMurottalSlotRef.current = null;
+            setIsMurottalPlaying(false);
+            return;
+          }
           audio.currentTime = 0;
           audio.play().catch(() => {});
           return;
         }
 
-        const allTracks = [...customMurottalTracksRef.current, ...DEFAULT_JUZ_30_TRACKS];
-        const currentIndex = allTracks.findIndex((t) => t.id === track.id);
-        const startIdx = currentIndex >= 0 ? currentIndex : 0;
-
-        if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-          // While offline, advance to the next cached track (or loop current cached track seamlessly)
-          for (let offset = 1; offset <= allTracks.length; offset++) {
-            const candidate = allTracks[(startIdx + offset) % allTracks.length];
-            const cUrl = (candidate.audioUrl || '').trim();
-            const isLocal = cUrl.startsWith('data:') || cUrl.startsWith(IDB_AUDIO_PREFIX);
-            const isCached = isLocal || (await isExternalAudioCachedAndValid(cUrl));
-            if (isCached) {
-              if (candidate.id === track.id) {
-                audio.currentTime = 0;
-                audio.play().catch(() => {});
-              } else {
-                handlePlayMurottalTrack(candidate);
-              }
-              return;
-            }
-          }
-          setIsMurottalPlaying(false);
-          return;
-        }
-
-        const nextIndex = (startIdx + 1) % allTracks.length;
-        handlePlayMurottalTrack(allTracks[nextIndex]);
+        await advanceToNextTrack();
       };
 
       const startPlayback = () => {
@@ -1287,6 +1459,8 @@ export default function App() {
   const handleStopMurottal = () => {
     clearMurottalFade();
     fadeTargetBellKeyRef.current = null;
+    activeMurottalEndAtRef.current = null;
+    activeMurottalSlotRef.current = null;
     if (murottalAudioRef.current) {
       murottalAudioRef.current.pause();
       murottalAudioRef.current.currentTime = 0;

@@ -570,10 +570,9 @@ export async function collectMurottalAudioResources(
   murottalConfig: MurottalConfig
 ): Promise<{ murottalTargets: MurottalDownloadTarget[]; murottalLocalCount: number }> {
   const customTracks = await getCustomMurottalTracks().catch(() => [] as MurottalTrack[]);
-  const allTracks: MurottalTrack[] = [...customTracks, ...DEFAULT_JUZ_30_TRACKS];
+  const allTracks: MurottalTrack[] = [...DEFAULT_JUZ_30_TRACKS, ...customTracks];
   const trackMap = new Map<string, MurottalTrack>(allTracks.map((t) => [t.id, t]));
 
-  const selectedIds = new Set<string>();
   const targetHttpMap = new Map<string, string>(); // exact trimmed url -> label
   const localTrackedIds = new Set<string>();
 
@@ -590,32 +589,21 @@ export async function collectMurottalAudioResources(
     }
   };
 
-  // 1. Primary selected track (morning / manual default)
-  const primaryTrack =
-    (murottalConfig.selectedTrackId && trackMap.get(murottalConfig.selectedTrackId)) ||
-    DEFAULT_JUZ_30_TRACKS[1];
-  if (primaryTrack) {
-    selectedIds.add(primaryTrack.id);
-    registerTrack(primaryTrack);
-  }
+  // 1. ALL 38 tracks in Juz 30 playlist (Al-Fatihah + Surah 78 An-Naba' s/d 114 An-Nas)
+  DEFAULT_JUZ_30_TRACKS.forEach((track) => registerTrack(track));
 
-  // 2. ALL configured Murottal schedule slots (pagi/harian & Senin-Jumat, aktif maupun nonaktif)
+  // 2. Primary selected track & ALL configured Murottal schedule slots
+  if (murottalConfig.selectedTrackId) {
+    registerTrack(trackMap.get(murottalConfig.selectedTrackId));
+  }
   murottalConfig.scheduleSlots?.forEach((slot) => {
-    const slotTrack =
-      (slot.trackId && trackMap.get(slot.trackId)) || primaryTrack;
-    if (slotTrack) {
-      selectedIds.add(slotTrack.id);
-      registerTrack(slotTrack);
+    if (slot.trackId) {
+      registerTrack(trackMap.get(slot.trackId));
     }
   });
 
   // 3. ALL custom uploaded / custom cloud-link Murottal tracks
-  customTracks.forEach((track) => {
-    selectedIds.add(track.id);
-    registerTrack(track);
-  });
-
-  void selectedIds;
+  customTracks.forEach((track) => registerTrack(track));
 
   return {
     murottalTargets: Array.from(targetHttpMap.entries()).map(([url, label]) => ({ url, label })),
@@ -1039,7 +1027,7 @@ export async function cacheAllAppAudioForOffline(
     murottalConfig
   );
 
-  // Phase 1: Download & verify ALL scheduled & custom Murottal audio files
+  // Phase 1: Download & verify ALL 38 Juz 30 surahs + custom/scheduled Murottal tracks sequentially
   const failedMurottalUrls: string[] = [];
   let murottalSuccessCount = 0;
 
@@ -1050,12 +1038,27 @@ export async function cacheAllAppAudioForOffline(
       done: i,
       total: murottalTargets.length,
       label: target.label,
-      statusText: `Mengunduh Murottal: ${i}/${murottalTargets.length} selesai... (${target.label})`,
+      statusText: `Mengunduh Murottal Juz 30: ${i}/${murottalTargets.length} surat selesai... (${target.label})`,
     });
-    const ok = await fetchAndCacheExternalAudio(target.url);
+
+    const alreadyCached = await isExternalAudioCachedAndValid(target.url);
+    let ok = alreadyCached;
+    if (!ok) {
+      ok = await fetchAndCacheExternalAudio(target.url);
+      if (!ok) {
+        await sleep(800);
+        ok = await fetchAndCacheExternalAudio(target.url);
+      }
+      if (i < murottalTargets.length - 1) {
+        await sleep(250);
+      }
+    }
+
     if (ok) {
       murottalSuccessCount++;
-      await onStatsUpdate?.();
+      if (!alreadyCached) {
+        await onStatsUpdate?.();
+      }
     } else {
       failedMurottalUrls.push(target.url);
     }
@@ -1064,7 +1067,7 @@ export async function cacheAllAppAudioForOffline(
       done: i + 1,
       total: murottalTargets.length,
       label: target.label,
-      statusText: `Mengunduh Murottal: ${i + 1}/${murottalTargets.length} selesai...`,
+      statusText: `Mengunduh Murottal Juz 30: ${i + 1}/${murottalTargets.length} surat selesai...`,
     });
   }
 
