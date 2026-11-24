@@ -1957,67 +1957,92 @@ export default function App() {
       />
 
       {/* Main Container */}
-      <main className="max-w-7xl mx-auto px-4 pt-2.5 sm:pt-4 space-y-3 sm:space-y-4">
-        {/* Audio Permission Banner */}
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 pt-4 sm:pt-5 space-y-4">
+        {/* Audio Permission Banner (only shown when gesture unlock is still needed) */}
         <AudioPermissionBanner
           settings={audioSettings}
           isAudioUnlocked={isAudioUnlocked}
           onActivated={() => setIsAudioUnlocked(true)}
         />
 
-        {/* Live Giant Clock & Day Selector */}
-        <LiveClockCard
-          currentTime={currentTime}
-          selectedDay={selectedDay}
-          setSelectedDay={setSelectedDay}
-          todayDayNumber={todayDayNum}
-          timeSyncInfo={timeSyncInfo}
-          onManualSync={performTimeSync}
-          nextScheduleItem={nextScheduleItem}
-          countdownSeconds={countdownSeconds}
-          latestScheduleItem={latestScheduleItem}
-          onTriggerScheduleBell={handleTestScheduleItem}
-          disabledDays={disabledDays}
-          onToggleDisabledDay={handleToggleDisabledDay}
-          fridayExtraOff={Boolean(audioSettings.fridayExtraOff)}
-          fridayEarlyDismissalTime={fridayEarlyTime}
-          onToggleFridayExtraOff={handleToggleFridayExtraOff}
-          onUpdateFridayEarlyTime={handleUpdateFridayEarlyTime}
-          onTriggerFridayEarlyDismissalNow={handleTriggerFridayEarlyDismissalNow}
-          asasModeEnabled={asasModeEnabled}
-          onToggleAsasMode={handleToggleAsasMode}
-          bellPlayback={bellPlayback}
-          onTogglePauseBell={togglePauseBellPlayback}
-          onStopBell={stopAllBellAudio}
-        />
-
-        {/* Dynamic Tab Views */}
+        {/* Primary View: Hero Clock, Next Bell, Prayer Times, and Expandable Schedule Table */}
         {activeTab === 'schedule' && (
-          <ScheduleList
-            schedules={activeModeSchedules}
+          <LiveClockCard
+            currentTime={currentTime}
             selectedDay={selectedDay}
-            audioSettings={audioSettings}
+            setSelectedDay={setSelectedDay}
+            todayDayNumber={todayDayNum}
+            timeSyncInfo={timeSyncInfo}
+            onManualSync={performTimeSync}
+            nextScheduleItem={nextScheduleItem}
+            countdownSeconds={countdownSeconds}
+            latestScheduleItem={latestScheduleItem}
+            onTriggerScheduleBell={handleTestScheduleItem}
             disabledDays={disabledDays}
             onToggleDisabledDay={handleToggleDisabledDay}
-            onTestScheduleItem={handleTestScheduleItem}
-            onEditScheduleItem={(item) => {
-              setEditingScheduleItem(item);
-              setIsEditorModalOpen(true);
-            }}
-            onDeleteScheduleItem={handleDeleteScheduleItem}
-            onToggleScheduleItem={handleToggleScheduleItem}
-            onAddScheduleItem={() => {
-              setEditingScheduleItem(null);
-              setIsEditorModalOpen(true);
-            }}
-            onOpenAddExtraPeriods={() => setIsAddExtraPeriodsOpen(true)}
-            onResetToDefault={handleResetToDefault}
-            onImportExport={() => setIsImportExportOpen(true)}
+            fridayExtraOff={Boolean(audioSettings.fridayExtraOff)}
+            fridayEarlyDismissalTime={fridayEarlyTime}
+            onToggleFridayExtraOff={handleToggleFridayExtraOff}
+            onUpdateFridayEarlyTime={handleUpdateFridayEarlyTime}
+            onTriggerFridayEarlyDismissalNow={handleTriggerFridayEarlyDismissalNow}
+            asasModeEnabled={asasModeEnabled}
+            onToggleAsasMode={handleToggleAsasMode}
             bellPlayback={bellPlayback}
             onTogglePauseBell={togglePauseBellPlayback}
             onStopBell={stopAllBellAudio}
-            asasModeEnabled={asasModeEnabled}
+            totalTodayBells={todayActiveSchedules.length}
+            scheduleListNode={
+              <ScheduleList
+                schedules={activeModeSchedules}
+                selectedDay={selectedDay}
+                audioSettings={audioSettings}
+                disabledDays={disabledDays}
+                onToggleDisabledDay={handleToggleDisabledDay}
+                onTestScheduleItem={handleTestScheduleItem}
+                onEditScheduleItem={(item) => {
+                  setEditingScheduleItem(item);
+                  setIsEditorModalOpen(true);
+                }}
+                onDeleteScheduleItem={handleDeleteScheduleItem}
+                onToggleScheduleItem={handleToggleScheduleItem}
+                onAddScheduleItem={() => {
+                  setEditingScheduleItem(null);
+                  setIsEditorModalOpen(true);
+                }}
+                onOpenAddExtraPeriods={() => setIsAddExtraPeriodsOpen(true)}
+                onResetToDefault={handleResetToDefault}
+                onImportExport={() => setIsImportExportOpen(true)}
+                bellPlayback={bellPlayback}
+                onTogglePauseBell={togglePauseBellPlayback}
+                onStopBell={stopAllBellAudio}
+                asasModeEnabled={asasModeEnabled}
+              />
+            }
           />
+        )}
+
+        {/* Settings Sub-Navigation Strip (Voice / Time Sync / Logs) */}
+        {(activeTab === 'voice' || activeTab === 'time-sync' || activeTab === 'logs') && (
+          <div className="bg-white border border-slate-200/80 rounded-2xl p-1.5 inline-flex flex-wrap items-center gap-1 shadow-2xs">
+            {[
+              { id: 'voice', label: 'Pengaturan Suara & TTS' },
+              { id: 'time-sync', label: 'Integrasi API Waktu' },
+              { id: 'logs', label: 'Riwayat Bel' },
+            ].map((sub) => (
+              <button
+                key={sub.id}
+                type="button"
+                onClick={() => setActiveTab(sub.id)}
+                className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-colors cursor-pointer whitespace-nowrap ${
+                  activeTab === sub.id
+                    ? 'bg-blue-600 text-white shadow-xs'
+                    : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                }`}
+              >
+                {sub.label}
+              </button>
+            ))}
+          </div>
         )}
 
         {activeTab === 'murottal' && (

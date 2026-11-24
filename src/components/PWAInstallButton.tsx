@@ -224,34 +224,34 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({
 
   return (
     <>
-      {/* Compact Header Pill — preserves exact existing Navbar visual language */}
+      {/* Compact Header Pill — clean white-surface style for 1-row header */}
       <button
         type="button"
         onClick={() => setIsModalOpen(true)}
         title="Pengaturan Aplikasi Offline (PWA) & Buka Otomatis Saat Komputer Menyala"
-        className={`flex items-center gap-1.5 backdrop-blur-sm px-2.5 py-1 rounded-full border text-xs font-bold transition cursor-pointer ${
+        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold transition cursor-pointer whitespace-nowrap shrink-0 ${
           !isOnline
-            ? 'bg-amber-400/25 hover:bg-amber-400/35 border-amber-200/50 text-amber-100'
+            ? 'bg-amber-50 hover:bg-amber-100 border-amber-200 text-amber-800'
             : isInstalled || isInstallable
-            ? 'bg-emerald-400/20 hover:bg-emerald-400/30 border-emerald-200/40 text-white'
-            : 'bg-white/15 hover:bg-white/25 border-white/25 text-white'
+            ? 'bg-slate-50 hover:bg-blue-50 border-slate-200 text-slate-700'
+            : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-700'
         }`}
       >
         {!isOnline ? (
-          <WifiOff className="w-3.5 h-3.5 text-amber-200" />
+          <WifiOff className="w-3.5 h-3.5 text-amber-600 shrink-0" />
         ) : isInstallable && !isInstalled ? (
-          <Download className="w-3.5 h-3.5 text-emerald-300" />
+          <Download className="w-3.5 h-3.5 text-blue-600 shrink-0" />
         ) : (
-          <HardDriveDownload className="w-3.5 h-3.5 text-emerald-300" />
+          <HardDriveDownload className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
         )}
         <span>
           {!isOnline
             ? 'Offline Aktif'
             : isInstallable && !isInstalled
-            ? 'Install App Offline'
+            ? 'Install Offline'
             : isInstalled
             ? 'App Offline'
-            : 'Mode Offline'}
+            : 'Online (Tersimpan)'}
         </span>
       </button>
 

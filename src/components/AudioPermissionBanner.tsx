@@ -43,26 +43,7 @@ export const AudioPermissionBanner: React.FC<AudioPermissionBannerProps> = ({
 
   return (
     <>
-      {isActuallyActive ? (
-        <div className="flex items-center justify-between px-2 py-0.5 text-xs text-slate-500 mb-1">
-          <div className="flex items-center gap-2">
-            <span className="relative flex h-2.5 w-2.5">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
-            </span>
-            <span className="text-[11px] font-bold text-emerald-700 tracking-wide">Audio Hidup</span>
-          </div>
-
-          <button
-            type="button"
-            onClick={() => setShowAutoStartGuide(true)}
-            className="text-[10px] text-slate-400 hover:text-blue-600 transition-colors flex items-center gap-1 cursor-pointer"
-          >
-            <Power className="w-3 h-3 text-slate-400" />
-            <span>Panduan Auto-Start</span>
-          </button>
-        </div>
-      ) : (
+      {isActuallyActive ? null : (
         <div className="bg-amber-50/85 border border-amber-200 rounded-2xl p-3.5 sm:p-4 flex flex-col md:flex-row items-center justify-between gap-3 mb-2 shadow-xs">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center shrink-0 border border-amber-200 shadow-xs">
