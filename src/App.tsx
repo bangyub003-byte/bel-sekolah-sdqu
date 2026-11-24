@@ -1933,7 +1933,7 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#F4F7FB] text-slate-800 antialiased font-sans pb-16 selection:bg-blue-600 selection:text-white">
+    <div className="min-h-screen bg-[#F4F7FB] text-slate-800 antialiased font-sans pb-6 selection:bg-blue-600 selection:text-white">
       {/* Top Navbar */}
       <Navbar
         activeTab={activeTab}
@@ -1957,7 +1957,7 @@ export default function App() {
       />
 
       {/* Main Container */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 pt-4 sm:pt-5 space-y-4">
+      <main className="max-w-[1440px] mx-auto px-4 sm:px-6 pt-3.5 sm:pt-4 space-y-3.5 sm:space-y-4">
         {/* Audio Permission Banner (only shown when gesture unlock is still needed) */}
         <AudioPermissionBanner
           settings={audioSettings}

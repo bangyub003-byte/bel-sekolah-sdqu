@@ -176,9 +176,9 @@ export const LiveClockCard: React.FC<LiveClockCardProps> = ({
   const semesterLabel = academicMonth >= 6 ? 'Semester Ganjil' : 'Semester Genap';
 
   return (
-    <div className="space-y-3.5">
-      {/* 1. Main Official School Clock Hero Card */}
-      <section className="clock-grid-bg border border-slate-200/80 rounded-3xl px-5 sm:px-8 py-5 sm:py-7 shadow-[0_6px_28px_rgba(15,23,42,0.04)] relative overflow-hidden">
+    <div className="space-y-3.5 sm:space-y-4">
+      {/* 1. Main Official School Clock Hero Card — fills desktop viewport cleanly */}
+      <section className="clock-grid-bg border border-slate-200/80 rounded-3xl px-6 sm:px-10 py-6 sm:py-8 min-h-[380px] sm:min-h-[430px] lg:min-h-[calc(100vh-23.5rem)] flex flex-col justify-between shadow-[0_6px_28px_rgba(15,23,42,0.04)] relative overflow-hidden">
         {/* Top Metadata Strip */}
         <div className="flex flex-wrap items-center justify-between gap-2.5">
           <div className="inline-flex items-center gap-2 bg-blue-50/90 border border-blue-200/70 rounded-full px-3 py-1 text-[11px] font-bold tracking-wider uppercase text-blue-700 whitespace-nowrap">
@@ -260,39 +260,40 @@ export const LiveClockCard: React.FC<LiveClockCardProps> = ({
         </div>
 
         {/* Center Giant Tabular Digital Clock */}
-        <div className="py-6 sm:py-9 flex flex-col items-center justify-center text-center">
+        <div className="my-auto py-8 sm:py-12 flex flex-col items-center justify-center text-center">
           <div className="inline-flex items-center justify-center font-mono tabular-nums font-extrabold tracking-tight select-none leading-none">
-            <span className="text-5xl sm:text-7xl md:text-8xl lg:text-[7rem] text-slate-900">
+            <span className="text-6xl sm:text-8xl md:text-9xl lg:text-[9.5rem] xl:text-[11.5rem] 2xl:text-[13rem] text-slate-900">
               {formattedHours}
             </span>
-            <span className="text-4xl sm:text-6xl md:text-7xl lg:text-[6.25rem] text-blue-600 mx-1.5 sm:mx-3">
+            <span className="text-5xl sm:text-7xl md:text-8xl lg:text-[8.5rem] xl:text-[10rem] 2xl:text-[11.5rem] text-blue-600 mx-2 sm:mx-4">
               :
             </span>
-            <span className="text-5xl sm:text-7xl md:text-8xl lg:text-[7rem] text-slate-900">
+            <span className="text-6xl sm:text-8xl md:text-9xl lg:text-[9.5rem] xl:text-[11.5rem] 2xl:text-[13rem] text-slate-900">
               {formattedMinutes}
             </span>
-            <span className="text-4xl sm:text-6xl md:text-7xl lg:text-[6.25rem] text-blue-600 mx-1.5 sm:mx-3">
+            <span className="text-5xl sm:text-7xl md:text-8xl lg:text-[8.5rem] xl:text-[10rem] 2xl:text-[11.5rem] text-blue-600 mx-2 sm:mx-4">
               :
             </span>
-            <span className="text-5xl sm:text-7xl md:text-8xl lg:text-[7rem] text-amber-500">
+            <span className="text-6xl sm:text-8xl md:text-9xl lg:text-[9.5rem] xl:text-[11.5rem] 2xl:text-[13rem] text-amber-500">
               {formattedSeconds}
             </span>
-            <span className="ml-3 sm:ml-4 self-end mb-1.5 sm:mb-3 bg-blue-600 text-white font-sans font-extrabold text-[11px] sm:text-xs px-2.5 py-1 rounded-lg shadow-xs whitespace-nowrap">
+            <span className="ml-3 sm:ml-5 self-end mb-2 sm:mb-4 xl:mb-5 bg-blue-600 text-white font-sans font-extrabold text-xs sm:text-sm xl:text-base px-3 sm:px-3.5 py-1.5 rounded-xl shadow-xs whitespace-nowrap">
               WIB
             </span>
           </div>
 
           {/* Centered Date & Semester/Mode Pill */}
-          <div className="mt-5 inline-flex flex-wrap items-center justify-center gap-2.5 bg-white border border-slate-200/90 rounded-full px-4 py-1.5 shadow-2xs">
-            <span className="inline-flex items-center gap-1.5 text-xs sm:text-sm font-bold text-slate-800 whitespace-nowrap">
-              <Calendar className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+          <div className="mt-7 sm:mt-9 inline-flex flex-wrap items-center justify-center gap-2.5 bg-white border border-slate-200/90 rounded-full px-5 py-2 shadow-2xs">
+            <span className="inline-flex items-center gap-2 text-xs sm:text-sm lg:text-base font-bold text-slate-800 whitespace-nowrap">
+              <Calendar className="w-4 h-4 text-blue-600 shrink-0" />
               <span>{formattedDate}</span>
             </span>
-            <span className="bg-blue-50 text-blue-700 border border-blue-200/80 px-2.5 py-0.5 rounded-full text-[11px] font-bold whitespace-nowrap">
+            <span className="bg-blue-50 text-blue-700 border border-blue-200/80 px-3 py-0.5 rounded-full text-xs font-bold whitespace-nowrap">
               {asasModeEnabled ? 'Mode ASAS' : semesterLabel}
             </span>
           </div>
         </div>
+        <div className="hidden sm:block" aria-hidden="true" />
       </section>
 
       {/* 2. Next Bell & Countdown Banner (2-column structured horizontal card) */}
@@ -429,36 +430,21 @@ export const LiveClockCard: React.FC<LiveClockCardProps> = ({
             <div
               key={entry.id}
               className={`relative rounded-xl px-3 py-2.5 text-center transition-colors ${
-                entry.isActive
-                  ? 'border-2 border-emerald-500 bg-emerald-50/40'
-                  : entry.isNext
+                entry.isNext
                   ? 'border border-blue-300 bg-blue-50/50'
                   : 'border border-slate-200/80 bg-slate-50/40'
               }`}
             >
-              {entry.isActive && (
-                <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 bg-emerald-600 text-white text-[9px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-full whitespace-nowrap">
-                  AKTIF
-                </span>
-              )}
               <div
                 className={`text-[10px] font-bold uppercase tracking-wider ${
-                  entry.isActive
-                    ? 'text-emerald-700'
-                    : entry.isNext
-                    ? 'text-blue-700'
-                    : 'text-slate-500'
+                  entry.isNext ? 'text-blue-700' : 'text-slate-500'
                 }`}
               >
                 {entry.label}
               </div>
               <div
                 className={`mt-1 text-sm sm:text-base font-mono font-extrabold tabular-nums ${
-                  entry.isActive
-                    ? 'text-emerald-900'
-                    : entry.isNext
-                    ? 'text-blue-700'
-                    : 'text-slate-900'
+                  entry.isNext ? 'text-blue-700' : 'text-slate-900'
                 }`}
               >
                 {entry.time}
