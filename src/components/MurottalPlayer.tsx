@@ -254,7 +254,7 @@ export const MurottalPlayer: React.FC<MurottalPlayerProps> = ({
             </h2>
 
             <p className="text-sm text-slate-600 leading-relaxed">
-              Murottal merdu <strong className="text-blue-700 font-bold">Mishary Rashid Alafasy (Juz 30 Lengkap)</strong> otomatis diputar terjadwal mulai pukul <strong className="text-slate-900 font-extrabold">{config.autoStartTime} WIB</strong> maupun di pertengahan jam pelajaran/istirahat yang bisa Anda atur bebas. Anda juga dapat mengunggah file MP3 murottal sendiri.
+              Murottal merdu <strong className="text-blue-700 font-bold">Muhammad Thaha Al-Junayd (Versi Anak / Juz 30 Lengkap)</strong> otomatis diputar terjadwal mulai pukul <strong className="text-slate-900 font-extrabold">{config.autoStartTime} WIB</strong> maupun di pertengahan jam pelajaran/istirahat yang bisa Anda atur bebas. Anda juga dapat mengunggah file MP3 murottal sendiri.
             </p>
 
             {/* Quick Status Badges */}
@@ -270,7 +270,7 @@ export const MurottalPlayer: React.FC<MurottalPlayerProps> = ({
 
               <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-bold bg-blue-50 text-blue-700 border border-blue-200">
                 <BookOpen className="w-3.5 h-3.5" />
-                <span>Qari: Mishary Rashid Alafasy (Juz 30)</span>
+                <span>Qari: Muhammad Thaha Al-Junayd (Versi Anak)</span>
               </span>
 
               {isPlaying && (
@@ -296,7 +296,7 @@ export const MurottalPlayer: React.FC<MurottalPlayerProps> = ({
                 {activeTrack?.title || DEFAULT_JUZ_30_TRACKS[1].title}
               </div>
               <div className="text-xs text-blue-600 font-semibold truncate">
-                {activeTrack?.reciter || 'Mishary Rashid Alafasy'}
+                {activeTrack?.reciter || 'Muhammad Thaha Al-Junayd (Versi Anak)'}
               </div>
             </div>
 
@@ -398,7 +398,7 @@ export const MurottalPlayer: React.FC<MurottalPlayerProps> = ({
             }`}
           >
             <BookOpen className="w-4 h-4" />
-            <span>Murottal Juz 30 ({DEFAULT_JUZ_30_TRACKS.length} Surah)</span>
+            <span>Murottal Juz 30 Muhammad Thaha ({DEFAULT_JUZ_30_TRACKS.length} Surah)</span>
           </button>
 
           <button
@@ -450,7 +450,7 @@ export const MurottalPlayer: React.FC<MurottalPlayerProps> = ({
             <div>
               <h3 className="text-base font-extrabold text-slate-900 flex items-center gap-2">
                 <BookOpen className="w-4 h-4 text-blue-600" />
-                <span>Daftar Surah Juz 30 (Mishary Rashid Alafasy)</span>
+                <span>Daftar Surah Juz 30 (Muhammad Thaha Al-Junayd - Versi Anak)</span>
               </h3>
               <p className="text-xs text-slate-500 mt-0.5">
                 Klik tombol putar pada surat yang ingin didengarkan. Secara otomatis akan berputar di pagi hari jam {config.autoStartTime} WIB.
@@ -986,7 +986,7 @@ export const MurottalPlayer: React.FC<MurottalPlayerProps> = ({
                           onChange={(e) => handleUpdateScheduleSlot(slot.id, { trackId: e.target.value })}
                           className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-xl text-xs text-slate-900 font-semibold focus:outline-hidden focus:border-blue-600 cursor-pointer"
                         >
-                          <optgroup label="Murottal Juz 30 (Mishary Rashid Alafasy)">
+                          <optgroup label="Murottal Juz 30 (Muhammad Thaha Al-Junayd - Versi Anak)">
                             {DEFAULT_JUZ_30_TRACKS.map((t) => (
                               <option key={t.id} value={t.id}>
                                 {t.title} ({t.durationStr})

@@ -489,6 +489,69 @@ export async function isExternalAudioCachedAndValid(rawUrl: string): Promise<boo
   return false;
 }
 
+const DEPRECATED_MUROTTAL_URL_PATTERNS = [
+  'mishaari_raashid_al_3afaasee',
+  'archive.org/download/TahaAlJunaid/',
+];
+
+function isDeprecatedMurottalUrl(url: string): boolean {
+  const lower = (url || '').toLowerCase();
+  return DEPRECATED_MUROTTAL_URL_PATTERNS.some((p) => lower.includes(p.toLowerCase()));
+}
+
+/**
+ * Clean up old Mishary Rashid / deprecated Murottal cache entries from both CacheStorage and IndexedDB
+ * so the 38 Muhammad Thaha Al-Junayd (child version) files are stored cleanly without exceeding cache limits.
+ */
+export async function purgeDeprecatedMurottalOfflineCache(): Promise<number> {
+  let removedCount = 0;
+
+  if (isCacheApiAvailable()) {
+    try {
+      const cache = await caches.open(OFFLINE_AUDIO_CACHE_NAME);
+      const keys = await cache.keys();
+      for (const req of keys) {
+        if (isDeprecatedMurottalUrl(req.url)) {
+          const deleted = await cache.delete(req);
+          if (deleted) removedCount++;
+        }
+      }
+    } catch {
+      // Ignore cache cleanup errors cleanly
+    }
+  }
+
+  try {
+    const db = await openOfflineUrlAudioIDB();
+    await new Promise<void>((resolve) => {
+      const tx = db.transaction(OFFLINE_URL_IDB_STORE, 'readwrite');
+      const store = tx.objectStore(OFFLINE_URL_IDB_STORE);
+      const req = store.getAllKeys();
+      req.onsuccess = () => {
+        const allKeys = (req.result || []) as string[];
+        for (const key of allKeys) {
+          if (typeof key === 'string' && isDeprecatedMurottalUrl(key)) {
+            store.delete(key);
+            removedCount++;
+          }
+        }
+      };
+      tx.oncomplete = () => {
+        db.close();
+        resolve();
+      };
+      tx.onerror = () => {
+        db.close();
+        resolve();
+      };
+    });
+  } catch {
+    // Ignore IDB cleanup errors cleanly
+  }
+
+  return removedCount;
+}
+
 export async function fetchAndCacheExternalAudio(rawUrl: string): Promise<boolean> {
   const url = normalizeUrlKey(rawUrl);
   if (!url || !url.startsWith('http')) return false;
@@ -942,6 +1005,7 @@ export async function getOfflineCacheStats(
   totalTtsTargets: number;
   cachedScheduleTtsCount: number;
 }> {
+  await purgeDeprecatedMurottalOfflineCache();
   const { allHttpUrls, localCount } = await collectAllOfflineAudioResources(
     schedules,
     audioSettings,
@@ -1021,6 +1085,16 @@ export async function cacheAllAppAudioForOffline(
   totalTts: number;
   quotaReached: boolean;
 }> {
+  onProgress?.({
+    phase: 'murottal',
+    done: 0,
+    total: 38,
+    label: 'Membersihkan cache lama...',
+    statusText: 'Membersihkan cache murottal lama & menyiapkan 38 surat Muhammad Thaha...',
+  });
+  await purgeDeprecatedMurottalOfflineCache();
+  await onStatsUpdate?.();
+
   const { murottalTargets, otherHttpUrls } = await collectAllOfflineAudioResources(
     schedules,
     audioSettings,
