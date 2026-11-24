@@ -65,7 +65,11 @@ import { OfflineIndicator } from './components/OfflineIndicator';
 import {
   fetchAndCacheExternalAudio,
   getBlobUrlFromOfflineCache,
+  isExternalAudioCachedAndValid,
+  isGoogleDriveUrl,
 } from './utils/offlineCache';
+import { getCustomMurottalTracks } from './utils/murottalStorage';
+import { getAudioBlobFromIDB, IDB_AUDIO_PREFIX } from './utils/audioBlobStore';
 
 const LOCAL_STORAGE_KEY_SCHEDULES = 'sd_quran_schedules_v1';
 const LOCAL_STORAGE_KEY_SETTINGS = 'sd_quran_settings_v1';
@@ -176,11 +180,30 @@ export default function App() {
   }, []);
 
   const murottalAudioRef = useRef<HTMLAudioElement | null>(null);
+  const persistentMurottalAudioRef = useRef<HTMLAudioElement | null>(null);
+  const isMurottalStartingRef = useRef<boolean>(false);
+  const customMurottalTracksRef = useRef<MurottalTrack[]>([]);
+  const pendingMurottalRetryCleanupRef = useRef<(() => void) | null>(null);
   const murottalObjectUrlRef = useRef<string | null>(null);
   const firedMurottalKeysRef = useRef<Set<string>>(new Set());
   const isFadingMurottalRef = useRef<boolean>(false);
   const fadeIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const fadeTargetBellKeyRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const syncCustomMurottalTracks = () => {
+      getCustomMurottalTracks()
+        .then((tracks) => {
+          customMurottalTracksRef.current = tracks;
+        })
+        .catch(() => {});
+    };
+    syncCustomMurottalTracks();
+    window.addEventListener('murottal-tracks-updated', syncCustomMurottalTracks);
+    return () => {
+      window.removeEventListener('murottal-tracks-updated', syncCustomMurottalTracks);
+    };
+  }, []);
 
   // Today's Day of Week (0 = Minggu, 1 = Senin, ..., 6 = Sabtu)
   const todayDayNum = getDayOfWeekNumber(currentTime) as DayOfWeek;
@@ -713,19 +736,55 @@ export default function App() {
   useEffect(() => {
     performTimeSync();
 
-    // Check if browser already allows audio playback (e.g. site sound permission is Allowed)
+    // Prime one persistent <audio> element once so Chromium allows future scheduled Murottal auto-play
+    const SILENT_WAV_DATA_URL =
+      'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
+    const primePersistentMurottalElement = () => {
+      try {
+        if (isMurottalStartingRef.current) return;
+        if (!persistentMurottalAudioRef.current) {
+          const el = new Audio();
+          el.preload = 'auto';
+          persistentMurottalAudioRef.current = el;
+        }
+        const el = persistentMurottalAudioRef.current;
+        if (el.paused && !el.getAttribute('src')) {
+          el.muted = true;
+          el.src = SILENT_WAV_DATA_URL;
+          el.play()
+            .then(() => {
+              if (!isMurottalStartingRef.current && el.src === SILENT_WAV_DATA_URL) {
+                el.pause();
+                el.muted = false;
+                el.removeAttribute('src');
+                el.load();
+              }
+            })
+            .catch(() => {
+              if (!isMurottalStartingRef.current && el.src === SILENT_WAV_DATA_URL) {
+                el.muted = false;
+                el.removeAttribute('src');
+              }
+            });
+        }
+      } catch {}
+    };
+
+    // Check if browser already allows audio playback (e.g. site sound permission is Allowed or --autoplay-policy flag)
     const ctx = getAudioContext();
     if (ctx.state === 'running') {
       setIsAudioUnlocked(true);
+      primePersistentMurottalElement();
     } else {
       ctx.resume().then(() => {
         if (ctx.state === 'running') {
           setIsAudioUnlocked(true);
+          primePersistentMurottalElement();
         }
       }).catch(() => {});
     }
 
-    // Attach global window listeners: any click or key anywhere unlocks audio immediately
+    // Attach global window listeners: any click or key anywhere unlocks BOTH AudioContext and Murottal <audio>
     const unlockOnGesture = () => {
       const c = getAudioContext();
       if (c.state === 'suspended') {
@@ -735,6 +794,7 @@ export default function App() {
       } else {
         setIsAudioUnlocked(true);
       }
+      primePersistentMurottalElement();
       window.removeEventListener('pointerdown', unlockOnGesture);
       window.removeEventListener('keydown', unlockOnGesture);
       window.removeEventListener('click', unlockOnGesture);
@@ -851,9 +911,13 @@ export default function App() {
                 firedMurottalKeysRef.current.clear();
                 firedMurottalKeysRef.current.add(mKey);
               }
+              const allKnownTracks = [
+                ...customMurottalTracksRef.current,
+                ...DEFAULT_JUZ_30_TRACKS,
+              ];
               const targetTrack =
-                (slot.trackId && DEFAULT_JUZ_30_TRACKS.find((t) => t.id === slot.trackId)) ||
-                DEFAULT_JUZ_30_TRACKS.find((t) => t.id === currentMurottal.selectedTrackId) ||
+                (slot.trackId && allKnownTracks.find((t) => t.id === slot.trackId)) ||
+                allKnownTracks.find((t) => t.id === currentMurottal.selectedTrackId) ||
                 DEFAULT_JUZ_30_TRACKS[1];
               handlePlayMurottalTrackRef.current(targetTrack);
 
@@ -1021,46 +1085,78 @@ export default function App() {
 
   fadeOutAndStopMurottalRef.current = fadeOutAndStopMurottal;
 
-  // Murottal Audio Controls (with transparent offline CacheStorage support)
+  // Murottal Audio Controls (Offline-first: CacheStorage -> IndexedDB -> Online Stream, with persistent unlocked audio element)
   const handlePlayMurottalTrack = async (track: MurottalTrack) => {
+    isMurottalStartingRef.current = true;
     try {
       clearMurottalFade();
       fadeTargetBellKeyRef.current = null;
+      if (pendingMurottalRetryCleanupRef.current) {
+        pendingMurottalRetryCleanupRef.current();
+        pendingMurottalRetryCleanupRef.current = null;
+      }
       setActiveMurottalTrack(track);
-      setIsAudioUnlocked(true);
 
-      // Unlock Audio Context immediately within user gesture before async cache check
+      // Unlock Audio Context gracefully
       const ctx = getAudioContext();
       if (ctx.state === 'suspended') {
         ctx.resume().catch(() => {});
       }
 
-      if (murottalAudioRef.current) {
-        murottalAudioRef.current.pause();
-        murottalAudioRef.current.removeAttribute('src');
-        murottalAudioRef.current.load();
+      if (!persistentMurottalAudioRef.current) {
+        const el = new Audio();
+        el.preload = 'auto';
+        persistentMurottalAudioRef.current = el;
       }
+      const audio = persistentMurottalAudioRef.current;
+
+      // Reset previous handlers cleanly before changing src
+      audio.onplay = null;
+      audio.onerror = null;
+      audio.onended = null;
+      audio.pause();
+      audio.removeAttribute('src');
+      audio.load();
+
       if (murottalObjectUrlRef.current) {
         URL.revokeObjectURL(murottalObjectUrlRef.current);
         murottalObjectUrlRef.current = null;
       }
 
-      let resolvedSrc = track.audioUrl;
-      if (track.audioUrl.startsWith('http://') || track.audioUrl.startsWith('https://')) {
-        const cachedBlobUrl = await getBlobUrlFromOfflineCache(track.audioUrl);
+      const exactAudioUrl = (track.audioUrl || '').trim();
+      let resolvedSrc = exactAudioUrl;
+      const isOffline = typeof navigator !== 'undefined' && navigator.onLine === false;
+
+      if (exactAudioUrl.startsWith('http://') || exactAudioUrl.startsWith('https://')) {
+        // Priority 1: Search Cache Storage & IndexedDB offline store using the EXACT URL key
+        const cachedBlobUrl = await getBlobUrlFromOfflineCache(exactAudioUrl);
         if (cachedBlobUrl) {
           murottalObjectUrlRef.current = cachedBlobUrl;
           resolvedSrc = cachedBlobUrl;
-        } else if (typeof navigator === 'undefined' || navigator.onLine !== false) {
-          // Cache in background for offline resilience
-          fetchAndCacheExternalAudio(track.audioUrl).catch(() => {});
+        } else if (isOffline) {
+          console.warn('Murottal belum tersimpan di cache offline:', exactAudioUrl);
+          setIsMurottalPlaying(false);
+          return;
+        } else {
+          // Online and not yet cached: route Google Drive through proxy, and cache in background
+          if (isGoogleDriveUrl(exactAudioUrl)) {
+            resolvedSrc = `/api/audio/proxy?url=${encodeURIComponent(exactAudioUrl)}`;
+          }
+          fetchAndCacheExternalAudio(exactAudioUrl).catch(() => {});
+        }
+      } else if (exactAudioUrl.startsWith(IDB_AUDIO_PREFIX)) {
+        const idbBlob = await getAudioBlobFromIDB(exactAudioUrl);
+        if (idbBlob) {
+          const blobUrl = URL.createObjectURL(idbBlob);
+          murottalObjectUrlRef.current = blobUrl;
+          resolvedSrc = blobUrl;
         }
       }
 
-      const audio = new Audio();
       audio.preload = 'auto';
+      audio.muted = false;
+      audio.volume = Math.max(0, Math.min(1.0, murottalConfigRef.current.volume));
       audio.src = resolvedSrc;
-      audio.volume = Math.max(0, Math.min(1.0, murottalConfig.volume));
       murottalAudioRef.current = audio;
 
       audio.onplay = () => {
@@ -1069,11 +1165,11 @@ export default function App() {
       };
 
       audio.onerror = (e) => {
-        console.warn('Murottal audio load error:', e, 'URL:', track.audioUrl);
+        console.warn('Murottal audio load error:', e, 'URL:', exactAudioUrl);
         setIsMurottalPlaying(false);
       };
 
-      audio.onended = () => {
+      audio.onended = async () => {
         if (isFadingMurottalRef.current) {
           clearMurottalFade();
           setIsMurottalPlaying(false);
@@ -1082,40 +1178,88 @@ export default function App() {
         if (murottalConfigRef.current.repeatMode === 'repeat_one') {
           audio.currentTime = 0;
           audio.play().catch(() => {});
-        } else {
-          // Play next track in list
-          const currentIndex = DEFAULT_JUZ_30_TRACKS.findIndex((t) => t.id === track.id);
-          const nextIndex = (currentIndex + 1) % DEFAULT_JUZ_30_TRACKS.length;
-          handlePlayMurottalTrack(DEFAULT_JUZ_30_TRACKS[nextIndex]);
+          return;
+        }
+
+        const allTracks = [...customMurottalTracksRef.current, ...DEFAULT_JUZ_30_TRACKS];
+        const currentIndex = allTracks.findIndex((t) => t.id === track.id);
+        const startIdx = currentIndex >= 0 ? currentIndex : 0;
+
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+          // While offline, advance to the next cached track (or loop current cached track seamlessly)
+          for (let offset = 1; offset <= allTracks.length; offset++) {
+            const candidate = allTracks[(startIdx + offset) % allTracks.length];
+            const cUrl = (candidate.audioUrl || '').trim();
+            const isLocal = cUrl.startsWith('data:') || cUrl.startsWith(IDB_AUDIO_PREFIX);
+            const isCached = isLocal || (await isExternalAudioCachedAndValid(cUrl));
+            if (isCached) {
+              if (candidate.id === track.id) {
+                audio.currentTime = 0;
+                audio.play().catch(() => {});
+              } else {
+                handlePlayMurottalTrack(candidate);
+              }
+              return;
+            }
+          }
+          setIsMurottalPlaying(false);
+          return;
+        }
+
+        const nextIndex = (startIdx + 1) % allTracks.length;
+        handlePlayMurottalTrack(allTracks[nextIndex]);
+      };
+
+      const startPlayback = () => {
+        const playPromise = audio.play();
+        if (playPromise !== undefined) {
+          playPromise
+            .then(() => {
+              setIsMurottalPlaying(true);
+              setIsAudioUnlocked(true);
+            })
+            .catch((err) => {
+              console.warn('Murottal autoplay recovery triggered:', err);
+              const c = getAudioContext();
+              c.resume()
+                .then(() => audio.play())
+                .then(() => {
+                  setIsMurottalPlaying(true);
+                  setIsAudioUnlocked(true);
+                })
+                .catch(() => {
+                  setIsMurottalPlaying(false);
+                  // Register one-time gesture resume if browser requires initial click
+                  const resumeOnGesture = () => {
+                    cleanupRetry();
+                    audio
+                      .play()
+                      .then(() => {
+                        setIsMurottalPlaying(true);
+                        setIsAudioUnlocked(true);
+                      })
+                      .catch(() => {});
+                  };
+                  const cleanupRetry = () => {
+                    window.removeEventListener('pointerdown', resumeOnGesture);
+                    window.removeEventListener('keydown', resumeOnGesture);
+                    window.removeEventListener('click', resumeOnGesture);
+                  };
+                  pendingMurottalRetryCleanupRef.current = cleanupRetry;
+                  window.addEventListener('pointerdown', resumeOnGesture, { once: true, passive: true });
+                  window.addEventListener('keydown', resumeOnGesture, { once: true, passive: true });
+                  window.addEventListener('click', resumeOnGesture, { once: true, passive: true });
+                });
+            });
         }
       };
 
-      const playPromise = audio.play();
-      if (playPromise !== undefined) {
-        playPromise
-          .then(() => {
-            setIsMurottalPlaying(true);
-            setIsAudioUnlocked(true);
-          })
-          .catch((err) => {
-            console.warn('Audio playback waiting for browser permission/unlock:', err);
-            // Attempt auto-recovery via AudioContext resume
-            const c = getAudioContext();
-            c.resume().then(() => {
-              audio.play().then(() => {
-                setIsMurottalPlaying(true);
-                setIsAudioUnlocked(true);
-              }).catch(() => {
-                setIsMurottalPlaying(false);
-              });
-            }).catch(() => {
-              setIsMurottalPlaying(false);
-            });
-          });
-      }
+      startPlayback();
     } catch (e) {
       console.error('Error starting murottal:', e);
       setIsMurottalPlaying(false);
+    } finally {
+      isMurottalStartingRef.current = false;
     }
   };
 

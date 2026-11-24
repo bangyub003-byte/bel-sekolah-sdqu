@@ -74,8 +74,13 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({
   useEffect(() => {
     refreshStats();
     const onReady = () => setSwReady(true);
+    const onMurottalUpdated = () => refreshStats();
     window.addEventListener('pwa-offline-ready', onReady);
-    return () => window.removeEventListener('pwa-offline-ready', onReady);
+    window.addEventListener('murottal-tracks-updated', onMurottalUpdated);
+    return () => {
+      window.removeEventListener('pwa-offline-ready', onReady);
+      window.removeEventListener('murottal-tracks-updated', onMurottalUpdated);
+    };
   }, []);
 
   useEffect(() => {
@@ -97,11 +102,11 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({
     setCacheResultMsg(null);
     setCacheResultWarning(false);
     setCacheProgress({
-      phase: stats.totalHttpUrls > 0 ? 'http' : 'tts',
+      phase: stats.totalHttpUrls > 0 ? 'murottal' : 'tts',
       done: 0,
       total: Math.max(1, stats.totalHttpUrls || stats.totalTtsTargets),
       label: 'Memulai...',
-      statusText: 'Menyiapkan daftar audio & suara AI TTS jadwal...',
+      statusText: 'Menyiapkan daftar Murottal, audio bel, & suara AI TTS...',
     });
     try {
       const result = await cacheAllAppAudioForOffline(
@@ -120,13 +125,24 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({
       const totalReadyTts = result.downloadedTts + result.alreadyCachedTts;
       const parts: string[] = [];
 
-      if (result.totalHttp > 0) {
-        if (result.failedUrls.length === 0) {
-          parts.push(`${result.successCount}/${result.totalHttp} audio cloud & murottal siap offline`);
+      if (result.totalMurottal > 0) {
+        if (result.failedMurottalUrls.length === 0) {
+          parts.push(`${result.murottalSuccessCount}/${result.totalMurottal} Murottal siap offline`);
         } else {
           parts.push(
-            `${result.successCount}/${result.totalHttp} audio cloud tersimpan (${result.failedUrls.length} gagal)`
+            `${result.murottalSuccessCount}/${result.totalMurottal} Murottal tersimpan (${result.failedMurottalUrls.length} gagal)`
           );
+        }
+      }
+
+      const otherTotal = result.totalHttp - result.totalMurottal;
+      const otherSuccess = result.successCount - result.murottalSuccessCount;
+      const otherFailed = result.failedUrls.length - result.failedMurottalUrls.length;
+      if (otherTotal > 0) {
+        if (otherFailed === 0) {
+          parts.push(`${otherSuccess}/${otherTotal} audio bel/cloud siap offline`);
+        } else {
+          parts.push(`${otherSuccess}/${otherTotal} audio bel/cloud tersimpan (${otherFailed} gagal)`);
         }
       }
 

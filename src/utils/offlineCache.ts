@@ -1,10 +1,15 @@
-import { AudioSettings, MurottalConfig, ScheduleItem, SpeechLanguage } from '../types';
+import { AudioSettings, MurottalConfig, MurottalTrack, ScheduleItem, SpeechLanguage } from '../types';
 import { DEFAULT_JUZ_30_TRACKS } from '../data/defaultMurottal';
 import { DEFAULT_ASAS_SCHEDULES } from '../data/asasSchedule';
 import { buildFridayEarlyDismissalSchedule } from './fridaySchedule';
+import { getCustomMurottalTracks } from './murottalStorage';
 
 export const OFFLINE_AUDIO_CACHE_NAME = 'sd-quran-offline-audio-v1';
 const TRANSLATE_CACHE_STORAGE_KEY = 'sd_quran_ai_translate_cache_v1';
+const OFFLINE_URL_IDB_NAME = 'sd_quran_offline_url_audio_store';
+const OFFLINE_URL_IDB_STORE = 'url_audio_blobs';
+const OFFLINE_URL_IDB_VERSION = 1;
+const MIN_VALID_AUDIO_BYTES = 1024;
 
 function isCacheApiAvailable(): boolean {
   return typeof window !== 'undefined' && 'caches' in window;
@@ -122,111 +127,527 @@ export async function getDataUrlAudioFromOfflineCache(keyUrl: string): Promise<s
   }
 }
 
+function normalizeUrlKey(url: string): string {
+  return (url || '').trim();
+}
+
+export function isGoogleDriveUrl(url: string): boolean {
+  const u = normalizeUrlKey(url).toLowerCase();
+  return (
+    u.includes('drive.google.com') ||
+    u.includes('drive.usercontent.google.com') ||
+    u.includes('docs.google.com')
+  );
+}
+
+export function extractGoogleDriveFileId(url: string): string | null {
+  const trimmed = normalizeUrlKey(url);
+  const match =
+    trimmed.match(/\/d\/([a-zA-Z0-9_-]+)/) || trimmed.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+  return match && match[1] ? match[1] : null;
+}
+
+export function buildGoogleDriveDirectDownloadUrl(fileId: string): string {
+  return `https://drive.usercontent.google.com/download?id=${encodeURIComponent(fileId)}&export=download&confirm=t`;
+}
+
+function isTextOrHtmlContentType(contentType: string): boolean {
+  const ct = (contentType || '').toLowerCase();
+  return (
+    ct.includes('text/html') ||
+    ct.includes('application/json') ||
+    ct.includes('application/xml') ||
+    ct.includes('text/xml') ||
+    ct.includes('text/plain') ||
+    ct.includes('application/javascript')
+  );
+}
+
+function isValidAudioBuffer(buf: ArrayBuffer | null | undefined, contentType = ''): boolean {
+  if (!buf || buf.byteLength < MIN_VALID_AUDIO_BYTES) return false;
+  if (isTextOrHtmlContentType(contentType)) return false;
+
+  try {
+    const headBytes = new Uint8Array(buf, 0, Math.min(96, buf.byteLength));
+    const headStr = new TextDecoder('utf-8', { fatal: false })
+      .decode(headBytes)
+      .trim()
+      .toLowerCase();
+    if (
+      headStr.startsWith('<!doctype') ||
+      headStr.startsWith('<html') ||
+      headStr.startsWith('<head') ||
+      headStr.startsWith('<body') ||
+      headStr.startsWith('<?xml') ||
+      headStr.startsWith('{"error"') ||
+      headStr.startsWith('{"message"')
+    ) {
+      return false;
+    }
+  } catch {
+    // Binary audio decode check ok
+  }
+  return true;
+}
+
+function inferAudioMimeType(contentType: string, url: string, buf?: ArrayBuffer): string {
+  const ct = (contentType || '').split(';')[0].trim().toLowerCase();
+  if (buf && buf.byteLength >= 12) {
+    const b = new Uint8Array(buf, 0, 12);
+    // ID3 or MP3 frame sync
+    if (
+      (b[0] === 0x49 && b[1] === 0x44 && b[2] === 0x33) ||
+      (b[0] === 0xff && (b[1] & 0xe0) === 0xe0)
+    ) {
+      return 'audio/mpeg';
+    }
+    // RIFF WAVE
+    if (b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46) {
+      return 'audio/wav';
+    }
+    // OggS
+    if (b[0] === 0x4f && b[1] === 0x67 && b[2] === 0x67 && b[3] === 0x53) {
+      return 'audio/ogg';
+    }
+    // fLaC
+    if (b[0] === 0x66 && b[1] === 0x4c && b[2] === 0x61 && b[3] === 0x43) {
+      return 'audio/flac';
+    }
+    // ISO Base Media / M4A ('ftyp' at offset 4)
+    if (b[4] === 0x66 && b[5] === 0x74 && b[6] === 0x79 && b[7] === 0x70) {
+      return 'audio/mp4';
+    }
+  }
+
+  if (ct && ct.startsWith('audio/') && ct !== 'audio/octet-stream') {
+    return ct;
+  }
+
+  const lowerUrl = (url || '').toLowerCase();
+  if (lowerUrl.includes('.wav')) return 'audio/wav';
+  if (lowerUrl.includes('.ogg')) return 'audio/ogg';
+  if (lowerUrl.includes('.m4a') || lowerUrl.includes('.mp4')) return 'audio/mp4';
+  if (lowerUrl.includes('.aac')) return 'audio/aac';
+  return 'audio/mpeg';
+}
+
+function openOfflineUrlAudioIDB(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    if (typeof indexedDB === 'undefined') {
+      reject(new Error('IndexedDB unavailable'));
+      return;
+    }
+    const req = indexedDB.open(OFFLINE_URL_IDB_NAME, OFFLINE_URL_IDB_VERSION);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(OFFLINE_URL_IDB_STORE)) {
+        db.createObjectStore(OFFLINE_URL_IDB_STORE, { keyPath: 'url' });
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error || new Error('IndexedDB open error'));
+  });
+}
+
+async function saveBlobToOfflineUrlIDB(
+  rawUrl: string,
+  blob: Blob,
+  mimeType: string
+): Promise<void> {
+  const url = normalizeUrlKey(rawUrl);
+  if (!url || !blob || blob.size < MIN_VALID_AUDIO_BYTES) return;
+  try {
+    const db = await openOfflineUrlAudioIDB();
+    await new Promise<void>((resolve) => {
+      const tx = db.transaction(OFFLINE_URL_IDB_STORE, 'readwrite');
+      tx.objectStore(OFFLINE_URL_IDB_STORE).put({
+        url,
+        blob,
+        mimeType,
+        size: blob.size,
+        cachedAt: Date.now(),
+      });
+      tx.oncomplete = () => {
+        db.close();
+        resolve();
+      };
+      tx.onerror = () => {
+        db.close();
+        resolve();
+      };
+    });
+  } catch {
+    // Ignore IDB quota/availability errors gracefully
+  }
+}
+
+async function getBlobFromOfflineUrlIDB(
+  rawUrl: string
+): Promise<{ blob: Blob; mimeType: string } | null> {
+  const url = normalizeUrlKey(rawUrl);
+  if (!url) return null;
+  try {
+    const db = await openOfflineUrlAudioIDB();
+    return await new Promise<{ blob: Blob; mimeType: string } | null>((resolve) => {
+      const tx = db.transaction(OFFLINE_URL_IDB_STORE, 'readonly');
+      const req = tx.objectStore(OFFLINE_URL_IDB_STORE).get(url);
+      req.onsuccess = () => {
+        db.close();
+        const rec = req.result as { blob?: Blob; mimeType?: string } | undefined;
+        if (rec?.blob && rec.blob.size >= MIN_VALID_AUDIO_BYTES) {
+          resolve({
+            blob: rec.blob,
+            mimeType: rec.mimeType || rec.blob.type || 'audio/mpeg',
+          });
+        } else {
+          resolve(null);
+        }
+      };
+      req.onerror = () => {
+        db.close();
+        resolve(null);
+      };
+    });
+  } catch {
+    return null;
+  }
+}
+
 export async function saveArrayBufferToOfflineCache(
-  url: string,
+  rawUrl: string,
   buffer: ArrayBuffer,
   contentType = 'audio/mpeg'
 ): Promise<void> {
-  if (!isCacheApiAvailable() || !url.startsWith('http')) return;
+  const url = normalizeUrlKey(rawUrl);
+  if (!url.startsWith('http') || !isValidAudioBuffer(buffer, contentType)) return;
+  const normalizedMime = inferAudioMimeType(contentType, url, buffer);
+
+  if (isCacheApiAvailable()) {
+    try {
+      const cache = await caches.open(OFFLINE_AUDIO_CACHE_NAME);
+      const resp = new Response(buffer, {
+        status: 200,
+        headers: {
+          'Content-Type': normalizedMime,
+          'Content-Length': String(buffer.byteLength),
+          'X-Offline-Cached-At': String(Date.now()),
+        },
+      });
+      await cache.put(url, resp);
+    } catch {
+      // Ignore quota/cache errors gracefully
+    }
+  }
+
+  // Mirror into IndexedDB under exact same URL key for redundant offline persistence
   try {
-    const cache = await caches.open(OFFLINE_AUDIO_CACHE_NAME);
-    const resp = new Response(buffer, {
-      status: 200,
-      headers: {
-        'Content-Type': contentType,
-        'X-Offline-Cached-At': String(Date.now()),
-      },
-    });
-    await cache.put(url, resp);
+    const blob = new Blob([buffer], { type: normalizedMime });
+    await saveBlobToOfflineUrlIDB(url, blob, normalizedMime);
   } catch {
-    // Ignore quota/cache errors gracefully
+    // Ignore IDB mirror failure
   }
 }
 
-export async function getArrayBufferFromOfflineCache(url: string): Promise<ArrayBuffer | null> {
-  if (!isCacheApiAvailable()) return null;
-  try {
-    const cache = await caches.open(OFFLINE_AUDIO_CACHE_NAME);
-    const match = await cache.match(url);
-    if (!match) return null;
-    const buf = await match.arrayBuffer();
-    return buf && buf.byteLength > 0 ? buf : null;
-  } catch {
-    return null;
+export async function getArrayBufferFromOfflineCache(rawUrl: string): Promise<ArrayBuffer | null> {
+  const url = normalizeUrlKey(rawUrl);
+  if (!url) return null;
+
+  if (isCacheApiAvailable()) {
+    try {
+      const cache = await caches.open(OFFLINE_AUDIO_CACHE_NAME);
+      const match = await cache.match(url);
+      if (match) {
+        const ct = (match.headers.get('content-type') || '').toLowerCase();
+        if (match.type !== 'opaque' && match.status === 200 && !isTextOrHtmlContentType(ct)) {
+          const buf = await match.arrayBuffer();
+          if (isValidAudioBuffer(buf, ct)) {
+            return buf;
+          }
+        }
+        // Remove invalid/opaque SW artifact so it can be re-cached cleanly when online
+        await cache.delete(url).catch(() => {});
+      }
+    } catch {
+      // Ignore
+    }
   }
+
+  // Fallback to IndexedDB offline store using the exact same URL key
+  const idbRec = await getBlobFromOfflineUrlIDB(url);
+  if (idbRec) {
+    try {
+      const buf = await idbRec.blob.arrayBuffer();
+      if (isValidAudioBuffer(buf, idbRec.mimeType)) {
+        return buf;
+      }
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
 }
 
-export async function getBlobUrlFromOfflineCache(url: string): Promise<string | null> {
-  if (!isCacheApiAvailable() || !url.startsWith('http')) return null;
-  try {
-    const cache = await caches.open(OFFLINE_AUDIO_CACHE_NAME);
-    const match = await cache.match(url);
-    if (!match) return null;
-    const blob = await match.blob();
-    if (!blob || blob.size === 0) return null;
-    return URL.createObjectURL(blob);
-  } catch {
-    return null;
+export async function getBlobUrlFromOfflineCache(rawUrl: string): Promise<string | null> {
+  const url = normalizeUrlKey(rawUrl);
+  if (!url.startsWith('http')) return null;
+
+  if (isCacheApiAvailable()) {
+    try {
+      const cache = await caches.open(OFFLINE_AUDIO_CACHE_NAME);
+      const match = await cache.match(url);
+      if (match) {
+        const ct = (match.headers.get('content-type') || '').toLowerCase();
+        if (match.type !== 'opaque' && match.status === 200 && !isTextOrHtmlContentType(ct)) {
+          const buf = await match.arrayBuffer();
+          if (isValidAudioBuffer(buf, ct)) {
+            const mimeType = inferAudioMimeType(ct, url, buf);
+            const blob = new Blob([buf], { type: mimeType });
+            return URL.createObjectURL(blob);
+          }
+        }
+        // Purge broken/opaque SW cache entry so next online cycle refreshes cleanly
+        await cache.delete(url).catch(() => {});
+      }
+    } catch {
+      // Continue to IndexedDB fallback
+    }
   }
+
+  // IndexedDB backup lookup using exact same URL key
+  const idbRec = await getBlobFromOfflineUrlIDB(url);
+  if (idbRec) {
+    try {
+      const buf = await idbRec.blob.arrayBuffer();
+      if (isValidAudioBuffer(buf, idbRec.mimeType)) {
+        const mimeType = inferAudioMimeType(idbRec.mimeType, url, buf);
+        const playableBlob =
+          idbRec.blob.type === mimeType ? idbRec.blob : new Blob([buf], { type: mimeType });
+        // Backfill CacheStorage asynchronously
+        if (isCacheApiAvailable()) {
+          caches
+            .open(OFFLINE_AUDIO_CACHE_NAME)
+            .then((c) =>
+              c.put(
+                url,
+                new Response(buf, {
+                  status: 200,
+                  headers: { 'Content-Type': mimeType, 'Content-Length': String(buf.byteLength) },
+                })
+              )
+            )
+            .catch(() => {});
+        }
+        return URL.createObjectURL(playableBlob);
+      }
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
 }
 
-export async function fetchAndCacheExternalAudio(url: string): Promise<boolean> {
-  if (!url || !url.startsWith('http')) return false;
+export async function isExternalAudioCachedAndValid(rawUrl: string): Promise<boolean> {
+  const url = normalizeUrlKey(rawUrl);
+  if (!url.startsWith('http')) return false;
+
   if (isCacheApiAvailable()) {
     try {
       const cache = await caches.open(OFFLINE_AUDIO_CACHE_NAME);
       const existing = await cache.match(url);
-      if (existing) return true;
-    } catch {}
+      if (existing) {
+        const ct = (existing.headers.get('content-type') || '').toLowerCase();
+        if (existing.type !== 'opaque' && existing.status === 200 && !isTextOrHtmlContentType(ct)) {
+          const buf = await existing.arrayBuffer();
+          if (isValidAudioBuffer(buf, ct)) {
+            return true;
+          }
+        }
+        // Delete opaque or corrupted entry so it is cleanly re-downloaded
+        await cache.delete(url).catch(() => {});
+      }
+    } catch {
+      // Check IDB fallback
+    }
   }
 
-  const isGoogleDrive =
-    url.includes('drive.google.com') || url.includes('drive.usercontent.google.com');
-
-  const tryStoreResponse = async (res: Response): Promise<boolean> => {
-    if (!res.ok) return false;
-    const contentType = (res.headers.get('content-type') || '').toLowerCase();
-    if (contentType.includes('text/html') || contentType.includes('application/json')) {
+  const idbRec = await getBlobFromOfflineUrlIDB(url);
+  if (idbRec) {
+    try {
+      const buf = await idbRec.blob.arrayBuffer();
+      if (isValidAudioBuffer(buf, idbRec.mimeType)) {
+        // Restore into CacheStorage if CacheStorage lacked it
+        await saveArrayBufferToOfflineCache(url, buf, idbRec.mimeType);
+        return true;
+      }
+    } catch {
       return false;
     }
-    const buf = await res.arrayBuffer();
-    if (!buf || buf.byteLength === 0) return false;
-    await saveArrayBufferToOfflineCache(url, buf, contentType || 'audio/mpeg');
-    return true;
-  };
-
-  if (!isGoogleDrive) {
-    try {
-      const directRes = await fetch(url);
-      if (await tryStoreResponse(directRes)) return true;
-    } catch {
-      // Try proxy next
-    }
-  }
-
-  try {
-    const proxyRes = await fetch(`/api/audio/proxy?url=${encodeURIComponent(url)}`);
-    if (await tryStoreResponse(proxyRes)) return true;
-  } catch {
-    // Offline or unreachable
   }
 
   return false;
 }
 
-export function collectExternalAudioUrls(
+export async function fetchAndCacheExternalAudio(rawUrl: string): Promise<boolean> {
+  const url = normalizeUrlKey(rawUrl);
+  if (!url || !url.startsWith('http')) return false;
+
+  if (await isExternalAudioCachedAndValid(url)) {
+    return true;
+  }
+
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    return false;
+  }
+
+  const isDrive = isGoogleDriveUrl(url);
+
+  const tryFetchAndVerify = async (fetchTargetUrl: string, timeoutMs = 45000): Promise<boolean> => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(fetchTargetUrl, {
+        signal: controller.signal,
+        redirect: 'follow',
+        mode: 'cors',
+        cache: 'no-store',
+      });
+      if (!res.ok || res.type === 'opaque') return false;
+      const contentType = (res.headers.get('content-type') || '').toLowerCase();
+      if (isTextOrHtmlContentType(contentType)) {
+        return false;
+      }
+      const buf = await res.arrayBuffer();
+      if (!isValidAudioBuffer(buf, contentType)) {
+        return false;
+      }
+      await saveArrayBufferToOfflineCache(url, buf, contentType || 'audio/mpeg');
+      return await isExternalAudioCachedAndValid(url);
+    } catch {
+      return false;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  if (isDrive) {
+    // Step 1 for Google Drive: Server proxy handles redirect, cookies, and confirmation tokens
+    if (await tryFetchAndVerify(`/api/audio/proxy?url=${encodeURIComponent(url)}`, 45000)) {
+      return true;
+    }
+    // Step 2 fallback for large Google Drive files (>4.5MB serverless response cap): direct usercontent URL
+    const driveId = extractGoogleDriveFileId(url);
+    if (driveId) {
+      const directDriveUrl = buildGoogleDriveDirectDownloadUrl(driveId);
+      if (await tryFetchAndVerify(directDriveUrl, 45000)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // For standard external URLs (Archive.org, Cloudinary, CDN MP3/WAV):
+  // Try direct CORS fetch first (supports full-size downloads & follows redirects without opaque SW cache)
+  if (await tryFetchAndVerify(url, 45000)) {
+    return true;
+  }
+
+  // Fallback to server proxy when origin restricts browser CORS
+  if (await tryFetchAndVerify(`/api/audio/proxy?url=${encodeURIComponent(url)}`, 45000)) {
+    return true;
+  }
+
+  return false;
+}
+
+export interface MurottalDownloadTarget {
+  url: string;
+  label: string;
+}
+
+export async function collectMurottalAudioResources(
+  murottalConfig: MurottalConfig
+): Promise<{ murottalTargets: MurottalDownloadTarget[]; murottalLocalCount: number }> {
+  const customTracks = await getCustomMurottalTracks().catch(() => [] as MurottalTrack[]);
+  const allTracks: MurottalTrack[] = [...customTracks, ...DEFAULT_JUZ_30_TRACKS];
+  const trackMap = new Map<string, MurottalTrack>(allTracks.map((t) => [t.id, t]));
+
+  const selectedIds = new Set<string>();
+  const targetHttpMap = new Map<string, string>(); // exact trimmed url -> label
+  const localTrackedIds = new Set<string>();
+
+  const registerTrack = (track: MurottalTrack | undefined) => {
+    if (!track || !track.audioUrl) return;
+    const trimmed = normalizeUrlKey(track.audioUrl);
+    if (!trimmed) return;
+    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+      if (!targetHttpMap.has(trimmed)) {
+        targetHttpMap.set(trimmed, track.title || 'Murottal');
+      }
+    } else if (trimmed.startsWith('data:') || trimmed.startsWith('idb-audio://')) {
+      localTrackedIds.add(track.id || trimmed);
+    }
+  };
+
+  // 1. Primary selected track (morning / manual default)
+  const primaryTrack =
+    (murottalConfig.selectedTrackId && trackMap.get(murottalConfig.selectedTrackId)) ||
+    DEFAULT_JUZ_30_TRACKS[1];
+  if (primaryTrack) {
+    selectedIds.add(primaryTrack.id);
+    registerTrack(primaryTrack);
+  }
+
+  // 2. ALL configured Murottal schedule slots (pagi/harian & Senin-Jumat, aktif maupun nonaktif)
+  murottalConfig.scheduleSlots?.forEach((slot) => {
+    const slotTrack =
+      (slot.trackId && trackMap.get(slot.trackId)) || primaryTrack;
+    if (slotTrack) {
+      selectedIds.add(slotTrack.id);
+      registerTrack(slotTrack);
+    }
+  });
+
+  // 3. ALL custom uploaded / custom cloud-link Murottal tracks
+  customTracks.forEach((track) => {
+    selectedIds.add(track.id);
+    registerTrack(track);
+  });
+
+  void selectedIds;
+
+  return {
+    murottalTargets: Array.from(targetHttpMap.entries()).map(([url, label]) => ({ url, label })),
+    murottalLocalCount: localTrackedIds.size,
+  };
+}
+
+export async function collectAllOfflineAudioResources(
   schedules: ScheduleItem[],
   audioSettings: AudioSettings,
   murottalConfig: MurottalConfig
-): { httpUrls: string[]; localCount: number } {
-  const httpSet = new Set<string>();
-  let localCount = 0;
+): Promise<{
+  murottalTargets: MurottalDownloadTarget[];
+  otherHttpUrls: string[];
+  allHttpUrls: string[];
+  localCount: number;
+}> {
+  const { murottalTargets, murottalLocalCount } = await collectMurottalAudioResources(
+    murottalConfig
+  );
+  const murottalUrlSet = new Set(murottalTargets.map((t) => t.url));
+  const otherHttpSet = new Set<string>();
+  let localCount = murottalLocalCount;
 
   const inspectUrl = (u?: string) => {
     if (!u || !u.trim()) return;
-    if (u.startsWith('http://') || u.startsWith('https://')) {
-      httpSet.add(u);
-    } else if (u.startsWith('data:') || u.startsWith('idb-audio://')) {
+    const trimmed = normalizeUrlKey(u);
+    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+      if (!murottalUrlSet.has(trimmed)) {
+        otherHttpSet.add(trimmed);
+      }
+    } else if (trimmed.startsWith('data:') || trimmed.startsWith('idb-audio://')) {
       localCount++;
     }
   };
@@ -249,15 +670,59 @@ export function collectExternalAudioUrls(
   inspectUrl(audioSettings.customPrefixAudioUrl);
   inspectUrl(audioSettings.globalOutroChimeUrl);
 
-  // Selected & scheduled Murottal tracks
-  const trackMap = new Map(DEFAULT_JUZ_30_TRACKS.map((t) => [t.id, t.audioUrl]));
-  if (murottalConfig.selectedTrackId) {
-    inspectUrl(trackMap.get(murottalConfig.selectedTrackId));
-  }
-  murottalConfig.scheduleSlots?.forEach((slot) => {
-    if (slot.enabled && slot.trackId) {
-      inspectUrl(trackMap.get(slot.trackId));
+  const otherHttpUrls = Array.from(otherHttpSet);
+  const allHttpUrls = [...murottalTargets.map((t) => t.url), ...otherHttpUrls];
+
+  return {
+    murottalTargets,
+    otherHttpUrls,
+    allHttpUrls,
+    localCount,
+  };
+}
+
+export function collectExternalAudioUrls(
+  schedules: ScheduleItem[],
+  audioSettings: AudioSettings,
+  murottalConfig: MurottalConfig
+): { httpUrls: string[]; localCount: number } {
+  const httpSet = new Set<string>();
+  let localCount = 0;
+
+  const inspectUrl = (u?: string) => {
+    if (!u || !u.trim()) return;
+    const trimmed = normalizeUrlKey(u);
+    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+      httpSet.add(trimmed);
+    } else if (trimmed.startsWith('data:') || trimmed.startsWith('idb-audio://')) {
+      localCount++;
     }
+  };
+
+  const inspectSchedules = (list?: ScheduleItem[]) => {
+    if (!list) return;
+    for (const s of list) {
+      inspectUrl(s.customAudioUrl);
+      inspectUrl(s.customChimeUrl);
+      inspectUrl(s.customOutroChimeUrl);
+    }
+  };
+
+  inspectSchedules(schedules);
+  inspectSchedules(audioSettings.asasSchedules);
+
+  audioSettings.customChimes?.forEach((c) => inspectUrl(c.audioUrl));
+  audioSettings.postBellTracks?.forEach((t) => inspectUrl(t.audioUrl));
+  audioSettings.clonedProfiles?.forEach((p) => inspectUrl(p.sampleAudioUrl));
+  inspectUrl(audioSettings.customPrefixAudioUrl);
+  inspectUrl(audioSettings.globalOutroChimeUrl);
+
+  // Selected & scheduled Murottal tracks (synchronous fallback)
+  const trackMap = new Map(DEFAULT_JUZ_30_TRACKS.map((t) => [t.id, t.audioUrl]));
+  const primaryUrl = trackMap.get(murottalConfig.selectedTrackId) || DEFAULT_JUZ_30_TRACKS[1]?.audioUrl;
+  inspectUrl(primaryUrl);
+  murottalConfig.scheduleSlots?.forEach((slot) => {
+    inspectUrl((slot.trackId && trackMap.get(slot.trackId)) || primaryUrl);
   });
 
   return { httpUrls: Array.from(httpSet), localCount };
@@ -489,7 +954,7 @@ export async function getOfflineCacheStats(
   totalTtsTargets: number;
   cachedScheduleTtsCount: number;
 }> {
-  const { httpUrls, localCount } = collectExternalAudioUrls(
+  const { allHttpUrls, localCount } = await collectAllOfflineAudioResources(
     schedules,
     audioSettings,
     murottalConfig
@@ -500,15 +965,18 @@ export async function getOfflineCacheStats(
   let cachedTtsCount = 0;
   let cachedScheduleTtsCount = 0;
 
+  for (const u of allHttpUrls) {
+    if (await isExternalAudioCachedAndValid(u)) {
+      cachedHttpUrls++;
+    }
+  }
+
   if (isCacheApiAvailable()) {
     try {
       const cache = await caches.open(OFFLINE_AUDIO_CACHE_NAME);
       const keys = await cache.keys();
       const keySet = new Set(keys.map((k) => k.url));
 
-      for (const u of httpUrls) {
-        if (keySet.has(u)) cachedHttpUrls++;
-      }
       for (const req of keys) {
         if (req.url.startsWith('https://offline-tts.local/')) {
           cachedTtsCount++;
@@ -525,7 +993,7 @@ export async function getOfflineCacheStats(
   }
 
   return {
-    totalHttpUrls: httpUrls.length,
+    totalHttpUrls: allHttpUrls.length,
     cachedHttpUrls,
     localCount,
     cachedTtsCount,
@@ -535,7 +1003,7 @@ export async function getOfflineCacheStats(
 }
 
 export interface OfflinePreCacheProgress {
-  phase: 'http' | 'tts' | 'cooldown';
+  phase: 'murottal' | 'http' | 'tts' | 'cooldown';
   done: number;
   total: number;
   label: string;
@@ -556,42 +1024,83 @@ export async function cacheAllAppAudioForOffline(
   successCount: number;
   totalHttp: number;
   failedUrls: string[];
+  murottalSuccessCount: number;
+  totalMurottal: number;
+  failedMurottalUrls: string[];
   downloadedTts: number;
   alreadyCachedTts: number;
   failedTts: number;
   totalTts: number;
   quotaReached: boolean;
 }> {
-  // Phase 1: External HTTP audio (Cloudinary, Drive, Murottal)
-  const { httpUrls } = collectExternalAudioUrls(schedules, audioSettings, murottalConfig);
-  const failedUrls: string[] = [];
-  let successCount = 0;
+  const { murottalTargets, otherHttpUrls } = await collectAllOfflineAudioResources(
+    schedules,
+    audioSettings,
+    murottalConfig
+  );
 
-  for (let i = 0; i < httpUrls.length; i++) {
-    const url = httpUrls[i];
+  // Phase 1: Download & verify ALL scheduled & custom Murottal audio files
+  const failedMurottalUrls: string[] = [];
+  let murottalSuccessCount = 0;
+
+  for (let i = 0; i < murottalTargets.length; i++) {
+    const target = murottalTargets[i];
+    onProgress?.({
+      phase: 'murottal',
+      done: i,
+      total: murottalTargets.length,
+      label: target.label,
+      statusText: `Mengunduh Murottal: ${i}/${murottalTargets.length} selesai... (${target.label})`,
+    });
+    const ok = await fetchAndCacheExternalAudio(target.url);
+    if (ok) {
+      murottalSuccessCount++;
+      await onStatsUpdate?.();
+    } else {
+      failedMurottalUrls.push(target.url);
+    }
+    onProgress?.({
+      phase: 'murottal',
+      done: i + 1,
+      total: murottalTargets.length,
+      label: target.label,
+      statusText: `Mengunduh Murottal: ${i + 1}/${murottalTargets.length} selesai...`,
+    });
+  }
+
+  // Phase 2: External HTTP audio for Bells, Chimes, & Post-Bell Recordings (Cloudinary, Drive, etc.)
+  const failedOtherUrls: string[] = [];
+  let otherSuccessCount = 0;
+
+  for (let i = 0; i < otherHttpUrls.length; i++) {
+    const url = otherHttpUrls[i];
     const shortName = decodeURIComponent(url.split('/').pop() || url).slice(0, 32);
     onProgress?.({
       phase: 'http',
       done: i,
-      total: httpUrls.length,
+      total: otherHttpUrls.length,
       label: shortName,
-      statusText: `Mengunduh Audio Cloud & Murottal: ${i}/${httpUrls.length} selesai... (${shortName})`,
+      statusText: `Mengunduh Audio Bel & Cloud: ${i}/${otherHttpUrls.length} selesai... (${shortName})`,
     });
     const ok = await fetchAndCacheExternalAudio(url);
     if (ok) {
-      successCount++;
+      otherSuccessCount++;
       await onStatsUpdate?.();
     } else {
-      failedUrls.push(url);
+      failedOtherUrls.push(url);
     }
     onProgress?.({
       phase: 'http',
       done: i + 1,
-      total: httpUrls.length,
+      total: otherHttpUrls.length,
       label: shortName,
-      statusText: `Mengunduh Audio Cloud & Murottal: ${i + 1}/${httpUrls.length} selesai...`,
+      statusText: `Mengunduh Audio Bel & Cloud: ${i + 1}/${otherHttpUrls.length} selesai...`,
     });
   }
+
+  const successCount = murottalSuccessCount + otherSuccessCount;
+  const totalHttp = murottalTargets.length + otherHttpUrls.length;
+  const failedUrls = [...failedMurottalUrls, ...failedOtherUrls];
 
   // Phase 2: Sequential pre-cache for all schedule AI TTS texts & translations (Reguler, ASAS, Jumat Ekstra)
   const ttsTargets = collectScheduleTtsTargets(schedules, audioSettings);
@@ -715,8 +1224,11 @@ export async function cacheAllAppAudioForOffline(
 
   return {
     successCount,
-    totalHttp: httpUrls.length,
+    totalHttp,
     failedUrls,
+    murottalSuccessCount,
+    totalMurottal: murottalTargets.length,
+    failedMurottalUrls,
     downloadedTts,
     alreadyCachedTts,
     failedTts,

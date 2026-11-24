@@ -122,6 +122,7 @@ export const MurottalPlayer: React.FC<MurottalPlayerProps> = ({
 
         await saveCustomMurottalTrack(newTrack);
         setCustomTracks((prev) => [newTrack, ...prev]);
+        window.dispatchEvent(new Event('murottal-tracks-updated'));
         setUploadSuccess(`Audio "${newTrack.title}" berhasil disimpan!`);
         setIsUploading(false);
         if (fileInputRef.current) fileInputRef.current.value = '';
@@ -143,6 +144,7 @@ export const MurottalPlayer: React.FC<MurottalPlayerProps> = ({
     if (confirm('Hapus file audio ini dari daftar?')) {
       await deleteCustomMurottalTrack(trackId);
       setCustomTracks((prev) => prev.filter((t) => t.id !== trackId));
+      window.dispatchEvent(new Event('murottal-tracks-updated'));
       if (activeTrack?.id === trackId) {
         onStop();
       }
