@@ -13,7 +13,7 @@ import {
   saveTranslationOffline,
 } from './offlineCache';
 import {
-  formatSpokenIndonesianTime,
+  formatSpokenTime,
   resolveTimeAnnouncementConfig,
 } from './timeSpeech';
 import { evaluateDateHolidayStatus } from './holidayUtils';
@@ -1123,7 +1123,7 @@ export async function playBellSequence(
       !options?.skipTimeAnnouncement &&
       Boolean(options?.spokenTime || options?.scheduleTime);
     const timeAnnouncementText = shouldAnnounceCurrentTime
-      ? formatSpokenIndonesianTime(realTimeHHMM)
+      ? formatSpokenTime(realTimeHHMM, speechLanguage)
       : '';
     const timeAnnouncementConfig = resolveTimeAnnouncementConfig(
       audioType,
@@ -1195,7 +1195,7 @@ export async function playBellSequence(
           undefined,
           timeAnnouncementConfig.voiceName,
           timeAnnouncementConfig.voiceDescription,
-          'id'
+          speechLanguage
         );
       } catch {
         return null;
@@ -1237,7 +1237,7 @@ export async function playBellSequence(
           settings,
           timeAnnouncementConfig.voiceName,
           true,
-          'id'
+          speechLanguage
         );
         await waitIfPaused(seqId);
         if (seqId !== activeBellSequenceId) return;

@@ -4,7 +4,7 @@ import { DEFAULT_ASAS_SCHEDULES } from '../data/asasSchedule';
 import { buildFridayEarlyDismissalSchedule } from './fridaySchedule';
 import { getCustomMurottalTracks } from './murottalStorage';
 import {
-  formatSpokenIndonesianTime,
+  formatSpokenTime,
   resolveTimeAnnouncementConfig,
 } from './timeSpeech';
 
@@ -816,8 +816,8 @@ export function collectScheduleTtsTargets(
     const audioType = item.audioType || 'tts';
     const speechLanguage: SpeechLanguage = item.speechLanguage || 'id';
 
-    // Collect current-time announcement ("Sekarang pukul ...") for every scheduled bell
-    const spokenTimeText = formatSpokenIndonesianTime(item.time);
+    // Collect current-time announcement matching each schedule's language ('id', 'ar', 'en', 'jv')
+    const spokenTimeText = formatSpokenTime(item.time, speechLanguage);
     const timeConfig = resolveTimeAnnouncementConfig(
       audioType,
       speechLanguage,
@@ -827,14 +827,14 @@ export function collectScheduleTtsTargets(
     if (spokenTimeText && timeConfig.shouldAnnounceTime) {
       const timeCacheKeyUrl = buildTtsCacheKeyUrl(
         timeConfig.voiceName,
-        'id',
+        speechLanguage,
         spokenTimeText
       );
       if (!dedupeMap.has(timeCacheKeyUrl)) {
         dedupeMap.set(timeCacheKeyUrl, {
-          label: `Jam ${item.time}`,
+          label: `Jam ${item.time} (${speechLanguage.toUpperCase()})`,
           voiceName: timeConfig.voiceName,
-          language: 'id',
+          language: speechLanguage,
           sourceText: spokenTimeText,
           resolvedText: spokenTimeText,
           needsTranslation: false,

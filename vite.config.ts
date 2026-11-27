@@ -121,6 +121,22 @@ export default defineConfig(({ command }) => {
           suppressWarnings: true,
         },
       }),
+      {
+        name: 'safe-pwa-dev-hmr',
+        apply: 'serve',
+        enforce: 'post',
+        transform(code, id) {
+          if (id.includes('pwa-entry-point-loaded')) {
+            const safeCode = code
+              .replace(/import\.meta\.hot\.on\(/g, 'import.meta.hot?.on(')
+              .replace(
+                /import\.meta\.hot\.send\(([^)]+)\);/g,
+                `import.meta.hot?.on('vite:ws:connect', () => { setTimeout(() => { try { import.meta.hot?.send($1); } catch {} }, 0); });`
+              );
+            return { code: safeCode, map: null };
+          }
+        },
+      },
     ],
     resolve: {
       alias: {
