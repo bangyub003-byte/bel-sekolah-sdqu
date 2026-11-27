@@ -14,12 +14,21 @@ import {
   ChevronRight,
   ChevronUp,
   ListChecks,
+  CalendarOff,
+  Plus,
+  Trash2,
+  Power,
 } from 'lucide-react';
-import { DayOfWeek, TimeSyncInfo, ScheduleItem } from '../types';
+import { DayOfWeek, TimeSyncInfo, ScheduleItem, HolidayPeriod } from '../types';
 import { getIndonesianDayName } from '../utils/timeSync';
 import { BellPlaybackState } from '../utils/audioSynth';
 import { getGunungkidulPrayerSummary } from '../utils/prayerTimes';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
+import {
+  HolidayEvaluationResult,
+  formatDateYYYYMMDD,
+  formatShortIndoDate,
+} from '../utils/holidayUtils';
 
 interface LiveClockCardProps {
   currentTime: Date;
@@ -34,6 +43,9 @@ interface LiveClockCardProps {
   onTriggerScheduleBell?: (item: ScheduleItem) => void;
   disabledDays?: DayOfWeek[];
   onToggleDisabledDay?: (day: DayOfWeek) => void;
+  holidayPeriods?: HolidayPeriod[];
+  onUpdateHolidayPeriods?: (periods: HolidayPeriod[]) => void;
+  todayHolidayStatus?: HolidayEvaluationResult;
   fridayExtraOff?: boolean;
   fridayEarlyDismissalTime?: string;
   onToggleFridayExtraOff?: () => void;
@@ -61,6 +73,9 @@ export const LiveClockCard: React.FC<LiveClockCardProps> = ({
   onTriggerScheduleBell,
   disabledDays = [0],
   onToggleDisabledDay,
+  holidayPeriods = [],
+  onUpdateHolidayPeriods,
+  todayHolidayStatus,
   fridayExtraOff = false,
   fridayEarlyDismissalTime = '12:30',
   onToggleFridayExtraOff,
@@ -77,6 +92,8 @@ export const LiveClockCard: React.FC<LiveClockCardProps> = ({
   const isOnline = useOnlineStatus();
   const [isEditingFriday, setIsEditingFriday] = useState(false);
   const [isScheduleTableOpen, setIsScheduleTableOpen] = useState(false);
+  const [isHolidayPanelOpen, setIsHolidayPanelOpen] = useState(false);
+  const [exceptionDateDrafts, setExceptionDateDrafts] = useState<Record<string, string>>({});
   const fridayPopoverRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -107,7 +124,112 @@ export const LiveClockCard: React.FC<LiveClockCardProps> = ({
     { num: 0, name: 'Minggu' },
   ];
 
-  const isTodayDisabled = disabledDays.includes(todayDayNumber);
+  const isTodayDisabled = todayHolidayStatus
+    ? todayHolidayStatus.isOff
+    : disabledDays.includes(todayDayNumber);
+
+  const todayDateStr = formatDateYYYYMMDD(currentTime);
+  const primaryHolidayPeriod = holidayPeriods[0] || null;
+  const anyHolidayRangeEnabled = holidayPeriods.some((p) => p.enabled);
+
+  const handleOpenOrInitHolidayPanel = () => {
+    if (!isHolidayPanelOpen && holidayPeriods.length === 0 && onUpdateHolidayPeriods) {
+      const nextWeek = new Date(currentTime);
+      nextWeek.setDate(nextWeek.getDate() + 14);
+      onUpdateHolidayPeriods([
+        {
+          id: `hol-${Date.now()}`,
+          name: 'Liburan Semester',
+          enabled: false,
+          startDate: todayDateStr,
+          endDate: formatDateYYYYMMDD(nextWeek),
+          excludedDays: [],
+          excludedDates: [],
+        },
+      ]);
+    }
+    setIsHolidayPanelOpen((prev) => !prev);
+  };
+
+  const handleQuickToggleHolidayRanges = () => {
+    if (!onUpdateHolidayPeriods) return;
+    if (holidayPeriods.length === 0) {
+      const nextWeek = new Date(currentTime);
+      nextWeek.setDate(nextWeek.getDate() + 14);
+      onUpdateHolidayPeriods([
+        {
+          id: `hol-${Date.now()}`,
+          name: 'Liburan Semester',
+          enabled: true,
+          startDate: todayDateStr,
+          endDate: formatDateYYYYMMDD(nextWeek),
+          excludedDays: [],
+          excludedDates: [],
+        },
+      ]);
+      setIsHolidayPanelOpen(true);
+      return;
+    }
+    const nextEnabled = !anyHolidayRangeEnabled;
+    onUpdateHolidayPeriods(
+      holidayPeriods.map((p, idx) => (idx === 0 || !nextEnabled ? { ...p, enabled: nextEnabled } : p))
+    );
+  };
+
+  const handleAddHolidayPeriod = () => {
+    if (!onUpdateHolidayPeriods) return;
+    const nextWeek = new Date(currentTime);
+    nextWeek.setDate(nextWeek.getDate() + 7);
+    onUpdateHolidayPeriods([
+      ...holidayPeriods,
+      {
+        id: `hol-${Date.now()}`,
+        name: `Libur Sekolah ${holidayPeriods.length + 1}`,
+        enabled: true,
+        startDate: todayDateStr,
+        endDate: formatDateYYYYMMDD(nextWeek),
+        excludedDays: [],
+        excludedDates: [],
+      },
+    ]);
+  };
+
+  const handleUpdatePeriod = (id: string, patch: Partial<HolidayPeriod>) => {
+    if (!onUpdateHolidayPeriods) return;
+    onUpdateHolidayPeriods(
+      holidayPeriods.map((p) => (p.id === id ? { ...p, ...patch } : p))
+    );
+  };
+
+  const handleTogglePeriodExcludedDay = (period: HolidayPeriod, day: DayOfWeek) => {
+    const current = period.excludedDays || [];
+    const next = current.includes(day)
+      ? current.filter((d) => d !== day)
+      : [...current, day].sort();
+    handleUpdatePeriod(period.id, { excludedDays: next });
+  };
+
+  const handleAddPeriodExcludedDate = (period: HolidayPeriod) => {
+    const dateVal = exceptionDateDrafts[period.id];
+    if (!dateVal) return;
+    const current = period.excludedDates || [];
+    if (!current.includes(dateVal)) {
+      handleUpdatePeriod(period.id, { excludedDates: [...current, dateVal].sort() });
+    }
+    setExceptionDateDrafts((prev) => ({ ...prev, [period.id]: '' }));
+  };
+
+  const handleRemovePeriodExcludedDate = (period: HolidayPeriod, dateToRemove: string) => {
+    const current = period.excludedDates || [];
+    handleUpdatePeriod(period.id, {
+      excludedDates: current.filter((d) => d !== dateToRemove),
+    });
+  };
+
+  const handleDeletePeriod = (id: string) => {
+    if (!onUpdateHolidayPeriods) return;
+    onUpdateHolidayPeriods(holidayPeriods.filter((p) => p.id !== id));
+  };
 
   const formattedHours = String(currentTime.getHours()).padStart(2, '0');
   const formattedMinutes = String(currentTime.getMinutes()).padStart(2, '0');
@@ -327,7 +449,9 @@ export const LiveClockCard: React.FC<LiveClockCardProps> = ({
               <div className="flex flex-wrap items-center gap-2">
                 <h2 className="text-sm sm:text-base font-extrabold text-slate-900 truncate">
                   {isTodayDisabled
-                    ? `Hari ${getIndonesianDayName(todayDayNumber)} Libur`
+                    ? todayHolidayStatus?.reason === 'holiday_range'
+                      ? todayHolidayStatus.label || 'Libur Sekolah (Rentang Tanggal)'
+                      : `Hari ${getIndonesianDayName(todayDayNumber)} Libur`
                     : nextScheduleItem
                     ? nextScheduleItem.label
                     : 'Jadwal Hari Ini Selesai'}
@@ -341,7 +465,7 @@ export const LiveClockCard: React.FC<LiveClockCardProps> = ({
               </div>
               <p className="text-xs text-slate-500 truncate mt-0.5">
                 {isTodayDisabled
-                  ? 'Bel & Murottal dimatikan otomatis pada hari libur'
+                  ? 'Bel, Murottal & rekaman tambahan dimatikan otomatis (Mode Libur)'
                   : nextScheduleItem
                   ? `${getChimeDisplayName(nextScheduleItem.chimeType)} + Speech Voice Synthesizer`
                   : 'Semua jadwal bel hari ini telah berbunyi dengan lancar'}
@@ -358,7 +482,11 @@ export const LiveClockCard: React.FC<LiveClockCardProps> = ({
               </span>
               {isTodayDisabled || !countdownParts ? (
                 <span className="text-xs sm:text-sm font-bold text-amber-700 whitespace-nowrap">
-                  {isTodayDisabled ? 'Hari Libur' : 'Selesai'}
+                  {isTodayDisabled
+                    ? todayHolidayStatus?.reason === 'holiday_range'
+                      ? 'Libur Tanggal'
+                      : 'Hari Libur'
+                    : 'Selesai'}
                 </span>
               ) : (
                 <div className="flex items-baseline gap-1.5 font-mono font-extrabold text-amber-600 tabular-nums whitespace-nowrap">
@@ -526,36 +654,32 @@ export const LiveClockCard: React.FC<LiveClockCardProps> = ({
                 const isDayOff = disabledDays.includes(day.num);
 
                 return (
-                  <button
+                  <div
                     key={day.num}
-                    type="button"
+                    role="button"
+                    tabIndex={0}
                     onClick={() => setSelectedDay(day.num)}
-                    className={`px-3 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all relative flex items-center justify-between gap-1 cursor-pointer ${
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        setSelectedDay(day.num);
+                      }
+                    }}
+                    className={`px-2.5 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all relative flex flex-col justify-between gap-2 cursor-pointer select-none ${
                       isSelected
                         ? isDayOff
                           ? 'bg-slate-700 text-white shadow-sm'
                           : 'bg-blue-600 text-white shadow-sm'
                         : isDayOff
-                        ? 'bg-rose-50/70 hover:bg-rose-50 text-rose-800 border border-rose-200'
+                        ? 'bg-rose-50/80 hover:bg-rose-50 text-rose-900 border border-rose-200'
                         : 'bg-slate-50 hover:bg-blue-50/70 text-slate-700 border border-slate-200/80 hover:border-blue-200'
                     }`}
                   >
-                    <span>{day.name}</span>
-                    <div className="flex items-center gap-1 shrink-0">
-                      {isDayOff && (
-                        <span
-                          className={`text-[9px] px-1.5 py-0.5 rounded-full font-extrabold ${
-                            isSelected
-                              ? 'bg-rose-500 text-white'
-                              : 'bg-rose-100 text-rose-700 border border-rose-200'
-                          }`}
-                        >
-                          Off
-                        </span>
-                      )}
+                    <div className="flex items-center justify-between gap-1">
+                      <span className="truncate">{day.name}</span>
                       {isToday && (
                         <span
-                          className={`text-[9px] px-1.5 py-0.5 rounded-full font-extrabold ${
+                          className={`text-[9px] px-1.5 py-0.5 rounded-full font-extrabold shrink-0 ${
                             isSelected
                               ? 'bg-white text-blue-700'
                               : 'bg-blue-100 text-blue-700 border border-blue-200'
@@ -565,7 +689,42 @@ export const LiveClockCard: React.FC<LiveClockCardProps> = ({
                         </span>
                       )}
                     </div>
-                  </button>
+
+                    {onToggleDisabledDay && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onToggleDisabledDay(day.num);
+                        }}
+                        title={
+                          isDayOff
+                            ? `Klik untuk AKTIFKAN kembali bel, murottal, & rekaman di hari ${day.name}`
+                            : `Klik untuk MATIKAN (OFF) seluruh bel, murottal, & rekaman di hari ${day.name}`
+                        }
+                        className={`w-full px-2 py-1 rounded-lg text-[10px] font-extrabold border transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                          isSelected
+                            ? isDayOff
+                              ? 'bg-rose-500 hover:bg-rose-600 text-white border-rose-400'
+                              : 'bg-white/95 hover:bg-white text-emerald-700 border-white/80 shadow-2xs'
+                            : isDayOff
+                            ? 'bg-rose-100 hover:bg-rose-200 text-rose-800 border-rose-300'
+                            : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-200'
+                        }`}
+                      >
+                        <span
+                          className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                            isDayOff
+                              ? isSelected
+                                ? 'bg-white'
+                                : 'bg-rose-500'
+                              : 'bg-emerald-500'
+                          }`}
+                        />
+                        <span>{isDayOff ? 'OFF (Libur)' : 'ON (Aktif)'}</span>
+                      </button>
+                    )}
+                  </div>
                 );
               })}
             </div>
@@ -723,28 +882,268 @@ export const LiveClockCard: React.FC<LiveClockCardProps> = ({
                       )}
                     </div>
                   )}
-                  {[
-                    { num: 6 as DayOfWeek, label: 'Sabtu' },
-                    { num: 0 as DayOfWeek, label: 'Minggu' },
-                  ].map((wk) => {
-                    const isOff = disabledDays.includes(wk.num);
-                    return (
+                  {onUpdateHolidayPeriods && (
+                    <div
+                      className={`rounded-lg text-[11px] font-bold border transition-all flex items-center overflow-hidden ${
+                        anyHolidayRangeEnabled
+                          ? 'bg-rose-50 text-rose-800 border-rose-300'
+                          : 'bg-slate-50 text-slate-700 border-slate-200'
+                      }`}
+                    >
                       <button
-                        key={wk.num}
                         type="button"
-                        onClick={() => onToggleDisabledDay(wk.num)}
-                        className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all cursor-pointer flex items-center gap-1.5 ${
-                          isOff
-                            ? 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
-                            : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+                        onClick={handleQuickToggleHolidayRanges}
+                        title={
+                          anyHolidayRangeEnabled
+                            ? 'Libur Rentang Tanggal sedang ON. Klik untuk nonaktifkan sementara.'
+                            : 'Klik untuk aktifkan Libur Rentang Tanggal (Liburan Semester)'
+                        }
+                        className={`px-2.5 py-1 flex items-center gap-1.5 cursor-pointer transition-colors ${
+                          anyHolidayRangeEnabled ? 'hover:bg-rose-100' : 'hover:bg-slate-100'
                         }`}
                       >
-                        <span className={`w-2 h-2 rounded-full ${isOff ? 'bg-rose-500' : 'bg-emerald-500'}`} />
-                        <span>{wk.label}: {isOff ? 'Nonaktif (Mati)' : 'Aktif'}</span>
+                        <span
+                          className={`w-2 h-2 rounded-full ${
+                            anyHolidayRangeEnabled ? 'bg-rose-500 animate-pulse' : 'bg-slate-400'
+                          }`}
+                        />
+                        <span>
+                          {anyHolidayRangeEnabled && primaryHolidayPeriod
+                            ? `Libur Tgl: ON (${formatShortIndoDate(primaryHolidayPeriod.startDate)} - ${formatShortIndoDate(primaryHolidayPeriod.endDate)})`
+                            : 'Libur Tanggal: Nonaktif'}
+                        </span>
                       </button>
-                    );
-                  })}
+
+                      <button
+                        type="button"
+                        onClick={handleOpenOrInitHolidayPanel}
+                        title="Atur rentang tanggal libur semester & pengecualian hari"
+                        className={`px-2 py-1 border-l flex items-center gap-1 cursor-pointer transition-colors ${
+                          anyHolidayRangeEnabled
+                            ? 'border-rose-200 hover:bg-rose-100 text-rose-700'
+                            : 'border-slate-200 hover:bg-slate-100 text-blue-700'
+                        }`}
+                      >
+                        <CalendarOff className="w-3 h-3" />
+                        <span>Atur Tanggal</span>
+                      </button>
+                    </div>
+                  )}
                 </div>
+              </div>
+            )}
+
+            {/* Expandable Semester / Date-Range Holiday Configurator with Day & Date Exceptions */}
+            {isHolidayPanelOpen && onUpdateHolidayPeriods && (
+              <div className="mt-3 pt-3 border-t border-slate-100 space-y-3 animate-fadeIn">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <div className="w-7 h-7 rounded-lg bg-rose-100 text-rose-600 flex items-center justify-center shrink-0">
+                      <CalendarOff className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-extrabold text-slate-900">
+                        Pengaturan Libur Rentang Tanggal (Liburan Semester) &amp; Pengecualian Hari
+                      </h4>
+                      <p className="text-[11px] text-slate-500">
+                        Atur tanggal mulai–selesai libur. Semua bel, murottal, &amp; rekaman tambahan otomatis mati di rentang ini kecuali hari/tanggal yang Anda kecualikan.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={handleAddHolidayPeriod}
+                      className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 flex items-center gap-1 cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Tambah Rentang</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsHolidayPanelOpen(false)}
+                      className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
+                      title="Tutup panel"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+
+                {holidayPeriods.length === 0 ? (
+                  <div className="bg-slate-50 border border-dashed border-slate-200 rounded-xl p-4 text-center text-xs text-slate-500">
+                    Belum ada rentang tanggal libur. Klik <strong>Tambah Rentang</strong> untuk mengatur jadwal liburan semester.
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {holidayPeriods.map((period) => {
+                      const draftExceptionDate = exceptionDateDrafts[period.id] || '';
+                      return (
+                        <div
+                          key={period.id}
+                          className={`rounded-2xl border p-3.5 space-y-3 transition-colors ${
+                            period.enabled
+                              ? 'bg-rose-50/40 border-rose-200'
+                              : 'bg-slate-50/70 border-slate-200'
+                          }`}
+                        >
+                          <div className="flex flex-col md:flex-row md:items-center justify-between gap-2.5">
+                            <div className="flex flex-wrap items-center gap-2 flex-1">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleUpdatePeriod(period.id, { enabled: !period.enabled })
+                                }
+                                className={`px-3 py-1.5 rounded-xl text-xs font-extrabold border flex items-center gap-1.5 cursor-pointer transition-all ${
+                                  period.enabled
+                                    ? 'bg-rose-600 hover:bg-rose-700 text-white border-rose-600 shadow-2xs'
+                                    : 'bg-white hover:bg-slate-100 text-slate-600 border-slate-300'
+                                }`}
+                              >
+                                <Power className="w-3.5 h-3.5" />
+                                <span>{period.enabled ? 'ON (Libur Aktif)' : 'OFF (Nonaktif)'}</span>
+                              </button>
+
+                              <input
+                                type="text"
+                                value={period.name || ''}
+                                onChange={(e) =>
+                                  handleUpdatePeriod(period.id, { name: e.target.value })
+                                }
+                                placeholder="Nama Liburan (misal: Liburan Semester Ganjil)"
+                                className="flex-1 min-w-[180px] bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-bold text-slate-800 focus:outline-hidden focus:border-blue-500"
+                              />
+                            </div>
+
+                            <div className="flex flex-wrap items-center gap-2">
+                              <div className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-xl px-2.5 py-1">
+                                <span className="text-[10px] font-bold text-slate-500 uppercase">
+                                  Dari:
+                                </span>
+                                <input
+                                  type="date"
+                                  value={period.startDate}
+                                  onChange={(e) =>
+                                    handleUpdatePeriod(period.id, { startDate: e.target.value })
+                                  }
+                                  className="text-xs font-mono font-bold text-slate-900 bg-transparent focus:outline-hidden cursor-pointer"
+                                />
+                              </div>
+
+                              <span className="text-xs font-bold text-slate-400">s/d</span>
+
+                              <div className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-xl px-2.5 py-1">
+                                <span className="text-[10px] font-bold text-slate-500 uppercase">
+                                  Sampai:
+                                </span>
+                                <input
+                                  type="date"
+                                  value={period.endDate}
+                                  onChange={(e) =>
+                                    handleUpdatePeriod(period.id, { endDate: e.target.value })
+                                  }
+                                  className="text-xs font-mono font-bold text-slate-900 bg-transparent focus:outline-hidden cursor-pointer"
+                                />
+                              </div>
+
+                              <button
+                                type="button"
+                                onClick={() => handleDeletePeriod(period.id)}
+                                title="Hapus rentang tanggal ini"
+                                className="p-1.5 rounded-xl bg-white hover:bg-rose-50 text-slate-400 hover:text-rose-600 border border-slate-200 cursor-pointer"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Pengecualian Hari (Hari yang tetap aktif berbunyi meski masuk rentang libur) */}
+                          <div className="pt-2 border-t border-slate-200/70 flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
+                            <div className="space-y-1.5">
+                              <span className="text-[11px] font-bold text-slate-700 block">
+                                Pengecualian Hari{' '}
+                                <span className="font-normal text-slate-500">
+                                  (Klik hari jika di hari tersebut bel/murottal TETAP AKTIF meski masuk tanggal libur):
+                                </span>
+                              </span>
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                {daysList.map((d) => {
+                                  const isExcepted = (period.excludedDays || []).includes(d.num);
+                                  return (
+                                    <button
+                                      key={d.num}
+                                      type="button"
+                                      onClick={() => handleTogglePeriodExcludedDay(period, d.num)}
+                                      className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all cursor-pointer ${
+                                        isExcepted
+                                          ? 'bg-emerald-600 text-white border-emerald-600 shadow-2xs'
+                                          : 'bg-white text-slate-600 border-slate-200 hover:bg-emerald-50 hover:text-emerald-700'
+                                      }`}
+                                    >
+                                      {isExcepted ? `✓ ${d.name} (Tetap Aktif)` : d.name}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+
+                            {/* Optional Specific Date Exceptions (e.g., Pembagian Rapor) */}
+                            <div className="space-y-1.5 shrink-0">
+                              <span className="text-[11px] font-bold text-slate-700 block">
+                                Pengecualian Tanggal Khusus (Opsional):
+                              </span>
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <input
+                                  type="date"
+                                  value={draftExceptionDate}
+                                  min={period.startDate || undefined}
+                                  max={period.endDate || undefined}
+                                  onChange={(e) =>
+                                    setExceptionDateDrafts((prev) => ({
+                                      ...prev,
+                                      [period.id]: e.target.value,
+                                    }))
+                                  }
+                                  className="bg-white border border-slate-200 rounded-lg px-2 py-1 text-[11px] font-mono font-bold text-slate-800 focus:outline-hidden focus:border-blue-500 cursor-pointer"
+                                />
+                                <button
+                                  type="button"
+                                  disabled={!draftExceptionDate}
+                                  onClick={() => handleAddPeriodExcludedDate(period)}
+                                  className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 disabled:opacity-50 cursor-pointer"
+                                >
+                                  + Kecualikan Tgl
+                                </button>
+                              </div>
+                              {period.excludedDates && period.excludedDates.length > 0 && (
+                                <div className="flex flex-wrap gap-1 pt-0.5">
+                                  {period.excludedDates.map((exDate) => (
+                                    <span
+                                      key={exDate}
+                                      className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-800 border border-emerald-200 px-2 py-0.5 rounded-full text-[10px] font-bold"
+                                    >
+                                      <span>{formatShortIndoDate(exDate)} (Aktif)</span>
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          handleRemovePeriodExcludedDate(period, exDate)
+                                        }
+                                        className="hover:text-rose-600 cursor-pointer"
+                                      >
+                                        <X className="w-3 h-3" />
+                                      </button>
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
           </div>

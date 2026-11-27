@@ -52,12 +52,14 @@ import {
   IDB_AUDIO_PREFIX,
 } from '../utils/audioBlobStore';
 import { AudioTrimmerModal } from './AudioTrimmerModal';
+import { HolidayEvaluationResult } from '../utils/holidayUtils';
 
 interface ChimeManagerProps {
   settings: AudioSettings;
   onUpdateSettings: (newSettings: AudioSettings) => void;
   onLogBell?: (label: string, text: string) => void;
   schedules?: ScheduleItem[];
+  todayHolidayStatus?: HolidayEvaluationResult;
 }
 
 export const ChimeManager: React.FC<ChimeManagerProps> = ({
@@ -65,6 +67,7 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
   onUpdateSettings,
   onLogBell,
   schedules = [],
+  todayHolidayStatus,
 }) => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<'upload' | 'record' | 'url'>('upload');
@@ -1540,11 +1543,24 @@ export const ChimeManager: React.FC<ChimeManagerProps> = ({
                       ) : (
                         <button
                           type="button"
-                          onClick={() => playPostBellTrack(track, 1.0)}
-                          className="bg-amber-500/20 hover:bg-amber-500 text-amber-300 hover:text-slate-950 border border-amber-500/30 font-bold px-3 py-1.5 rounded-xl text-xs flex items-center gap-1.5 cursor-pointer transition-all"
+                          disabled={Boolean(todayHolidayStatus?.isOff)}
+                          onClick={() => {
+                            if (todayHolidayStatus?.isOff) return;
+                            playPostBellTrack(track, 1.0);
+                          }}
+                          title={
+                            todayHolidayStatus?.isOff
+                              ? `Mode Libur (${todayHolidayStatus.label || 'Off'}): Rekaman setelah bel dinonaktifkan`
+                              : 'Putar rekaman tambahan sekarang'
+                          }
+                          className={`border font-bold px-3 py-1.5 rounded-xl text-xs flex items-center gap-1.5 transition-all ${
+                            todayHolidayStatus?.isOff
+                              ? 'bg-rose-500/10 text-rose-300 border-rose-500/30 cursor-not-allowed'
+                              : 'bg-amber-500/20 hover:bg-amber-500 text-amber-300 hover:text-slate-950 border-amber-500/30 cursor-pointer'
+                          }`}
                         >
                           <Play className="w-3.5 h-3.5 fill-current" />
-                          <span>Putar Tes</span>
+                          <span>{todayHolidayStatus?.isOff ? 'Libur (Off)' : 'Putar Tes'}</span>
                         </button>
                       )}
                     </div>

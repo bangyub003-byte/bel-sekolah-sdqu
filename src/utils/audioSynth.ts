@@ -16,6 +16,8 @@ import {
   formatSpokenIndonesianTime,
   resolveTimeAnnouncementConfig,
 } from './timeSpeech';
+import { evaluateDateHolidayStatus } from './holidayUtils';
+import { getSynchronizedDate, format24HourTime } from './timeSync';
 
 export interface BellPlaybackState {
   isPlaying: boolean;
@@ -1020,6 +1022,7 @@ export interface PlayBellSequenceOptions {
   label?: string;
   scheduleId?: string;
   scheduleTime?: string;
+  spokenTime?: string;
   skipTimeAnnouncement?: boolean;
   skipPostBellTracks?: boolean;
   fallbackMatchScheduleIds?: string[];
@@ -1114,10 +1117,14 @@ export async function playBellSequence(
     const useStandardMaleAi = audioType === 'tts' && settings.enableTTS !== false;
     const shouldGenerateAiAudio = audioType === 'cloned' || useMultilingualAi || useStandardMaleAi;
 
-    const timeAnnouncementText =
-      !options?.skipTimeAnnouncement && options?.scheduleTime
-        ? formatSpokenIndonesianTime(options.scheduleTime)
-        : '';
+    const realTimeHHMM =
+      options?.spokenTime || format24HourTime(getSynchronizedDate(), false);
+    const shouldAnnounceCurrentTime =
+      !options?.skipTimeAnnouncement &&
+      Boolean(options?.spokenTime || options?.scheduleTime);
+    const timeAnnouncementText = shouldAnnounceCurrentTime
+      ? formatSpokenIndonesianTime(realTimeHHMM)
+      : '';
     const timeAnnouncementConfig = resolveTimeAnnouncementConfig(
       audioType,
       speechLanguage,
@@ -1360,7 +1367,16 @@ export async function playBellSequence(
     if (seqId !== activeBellSequenceId) return;
 
     // Step 4: Scheduled Post-Bell Recording (Rekaman Tambahan Otomatis Setelah Bel)
-    if (!options?.skipPostBellTracks && settings.postBellTracks && settings.postBellTracks.length > 0) {
+    const isHolidaySilencedToday =
+      Boolean(options?.scheduleId || options?.scheduleTime) &&
+      evaluateDateHolidayStatus(getSynchronizedDate(), settings).isOff;
+
+    if (
+      !options?.skipPostBellTracks &&
+      !isHolidaySilencedToday &&
+      settings.postBellTracks &&
+      settings.postBellTracks.length > 0
+    ) {
       const matchingTracks = settings.postBellTracks.filter((track) => {
         if (!track.enabled || !track.audioUrl) return false;
         if (track.scheduleId === 'all') return true;

@@ -98,6 +98,16 @@ export interface PostBellTrack {
   createdAt: number;
 }
 
+export interface HolidayPeriod {
+  id: string;
+  name?: string; // e.g., "Liburan Semester Ganjil"
+  enabled: boolean; // ON / OFF
+  startDate: string; // YYYY-MM-DD
+  endDate: string; // YYYY-MM-DD
+  excludedDays?: DayOfWeek[]; // Days of week that stay ACTIVE even within startDate..endDate
+  excludedDates?: string[]; // Specific YYYY-MM-DD dates that stay ACTIVE within startDate..endDate
+}
+
 export interface AudioSettings {
   voiceURI: string;
   lang: string;
@@ -109,6 +119,7 @@ export interface AudioSettings {
   enableTTS: boolean;
   repeatSpeechCount: number; // 1 or 2 times
   disabledDays?: DayOfWeek[]; // Days silenced globally for BOTH Bells & Murottal (default: [0] = Minggu)
+  holidayPeriods?: HolidayPeriod[]; // Date-range holidays (e.g. Liburan Semester) with optional day/date exceptions
   useCustomPrefixAudio?: boolean;
   customPrefixAudioUrl?: string;
   customPrefixAudioName?: string;

@@ -32,6 +32,7 @@ import {
   deleteCustomMurottalTrack,
 } from '../utils/murottalStorage';
 import { getIndonesianDayName } from '../utils/timeSync';
+import { HolidayEvaluationResult } from '../utils/holidayUtils';
 
 interface MurottalPlayerProps {
   config: MurottalConfig;
@@ -46,6 +47,7 @@ interface MurottalPlayerProps {
   isAudioUnlocked: boolean;
   onUnlockAudio: () => void;
   disabledDays?: DayOfWeek[];
+  todayHolidayStatus?: HolidayEvaluationResult;
 }
 
 export const MurottalPlayer: React.FC<MurottalPlayerProps> = ({
@@ -61,6 +63,7 @@ export const MurottalPlayer: React.FC<MurottalPlayerProps> = ({
   isAudioUnlocked,
   onUnlockAudio,
   disabledDays = [0],
+  todayHolidayStatus,
 }) => {
   const [customTracks, setCustomTracks] = useState<MurottalTrack[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -273,6 +276,15 @@ export const MurottalPlayer: React.FC<MurottalPlayerProps> = ({
                 <span>Qari: Muhammad Thaha Al-Junayd (Versi Anak)</span>
               </span>
 
+              {todayHolidayStatus?.isOff && (
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-extrabold bg-rose-50 text-rose-700 border border-rose-200">
+                  <VolumeX className="w-3.5 h-3.5 text-rose-600" />
+                  <span>
+                    Mode Libur Aktif ({todayHolidayStatus.label || 'Hari Off'}): Murottal Dinonaktifkan
+                  </span>
+                </span>
+              )}
+
               {isPlaying && (
                 <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-extrabold bg-amber-50 text-amber-700 border border-amber-200 animate-pulse">
                   <Volume2 className="w-3.5 h-3.5 text-amber-600" />
@@ -323,12 +335,21 @@ export const MurottalPlayer: React.FC<MurottalPlayerProps> = ({
               ) : (
                 <button
                   type="button"
+                  disabled={Boolean(todayHolidayStatus?.isOff)}
                   onClick={() => {
                     const target = activeTrack || DEFAULT_JUZ_30_TRACKS[1];
                     onPlayTrack(target);
                   }}
-                  className="w-14 h-14 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white flex items-center justify-center shadow-lg shadow-blue-500/30 transition-all active:scale-95 cursor-pointer"
-                  title="Putar Sekarang"
+                  className={`w-14 h-14 rounded-2xl text-white flex items-center justify-center shadow-lg transition-all ${
+                    todayHolidayStatus?.isOff
+                      ? 'bg-rose-300 shadow-none cursor-not-allowed'
+                      : 'bg-blue-600 hover:bg-blue-700 shadow-blue-500/30 active:scale-95 cursor-pointer'
+                  }`}
+                  title={
+                    todayHolidayStatus?.isOff
+                      ? 'Hari ini sedang Mode Libur (Murottal dinonaktifkan)'
+                      : 'Putar Sekarang'
+                  }
                 >
                   <Play className="w-6 h-6 fill-white ml-0.5" />
                 </button>
@@ -926,12 +947,21 @@ export const MurottalPlayer: React.FC<MurottalPlayerProps> = ({
                         {/* Test Play button */}
                         <button
                           type="button"
+                          disabled={Boolean(todayHolidayStatus?.isOff)}
                           onClick={() => onPlayTrack(targetTrack)}
-                          className="px-2.5 py-1 bg-white hover:bg-blue-50 text-blue-700 border border-blue-200 rounded-lg text-xs font-bold flex items-center gap-1 shadow-2xs cursor-pointer transition-all"
-                          title="Uji putar surat jadwal ini"
+                          className={`px-2.5 py-1 rounded-lg text-xs font-bold flex items-center gap-1 shadow-2xs transition-all border ${
+                            todayHolidayStatus?.isOff
+                              ? 'bg-rose-50 text-rose-400 border-rose-200 cursor-not-allowed'
+                              : 'bg-white hover:bg-blue-50 text-blue-700 border-blue-200 cursor-pointer'
+                          }`}
+                          title={
+                            todayHolidayStatus?.isOff
+                              ? 'Hari ini sedang Mode Libur (Murottal dinonaktifkan)'
+                              : 'Uji putar surat jadwal ini'
+                          }
                         >
                           <Play className="w-3 h-3 fill-current" />
-                          <span>Uji Putar</span>
+                          <span>{todayHolidayStatus?.isOff ? 'Libur (Off)' : 'Uji Putar'}</span>
                         </button>
 
                         {/* Enable/Disable Toggle */}
@@ -1052,9 +1082,9 @@ export const MurottalPlayer: React.FC<MurottalPlayerProps> = ({
                           </button>
                         );
                       })}
-                      {(disabledDays.includes(6) || disabledDays.includes(0)) && (
+                      {disabledDays.length > 0 && (
                         <span className="text-[10px] text-rose-600 font-semibold ml-1">
-                          ({disabledDays.map((d) => getIndonesianDayName(d)).join(' & ')} dimatikan otomatis di Mode Libur)
+                          ({disabledDays.map((d) => getIndonesianDayName(d)).join(', ')} dimatikan otomatis di Mode Libur)
                         </span>
                       )}
                     </div>

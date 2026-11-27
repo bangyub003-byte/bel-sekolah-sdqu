@@ -26,12 +26,15 @@ import {
   getFridayEarlyDismissalTime,
   isFridayEkstraSuppressedItem,
 } from '../utils/fridaySchedule';
+import { HolidayEvaluationResult } from '../utils/holidayUtils';
 
 interface ScheduleListProps {
   schedules: ScheduleItem[];
   selectedDay: DayOfWeek;
+  todayDayNumber?: DayOfWeek;
   audioSettings: AudioSettings;
   disabledDays?: DayOfWeek[];
+  todayHolidayStatus?: HolidayEvaluationResult;
   onToggleDisabledDay?: (day: DayOfWeek) => void;
   onTestScheduleItem: (item: ScheduleItem) => void;
   onEditScheduleItem: (item: ScheduleItem) => void;
@@ -50,8 +53,10 @@ interface ScheduleListProps {
 export const ScheduleList: React.FC<ScheduleListProps> = ({
   schedules,
   selectedDay,
+  todayDayNumber,
   audioSettings,
   disabledDays = [0],
+  todayHolidayStatus,
   onToggleDisabledDay,
   onTestScheduleItem,
   onEditScheduleItem,
@@ -67,6 +72,11 @@ export const ScheduleList: React.FC<ScheduleListProps> = ({
   asasModeEnabled = false,
 }) => {
   const isSelectedDayDisabled = disabledDays.includes(selectedDay);
+  const isSelectedDayHolidayRange =
+    todayDayNumber !== undefined &&
+    selectedDay === todayDayNumber &&
+    Boolean(todayHolidayStatus?.isOff && todayHolidayStatus.reason === 'holiday_range');
+  const isEffectiveDayOff = isSelectedDayDisabled || isSelectedDayHolidayRange;
   const isFridayExtraOff =
     !asasModeEnabled && selectedDay === 5 && Boolean(audioSettings.fridayExtraOff);
   const fridayEarlyTime = getFridayEarlyDismissalTime(audioSettings);
@@ -237,8 +247,8 @@ export const ScheduleList: React.FC<ScheduleListProps> = ({
         </div>
       </div>
 
-      {/* Holiday / Day-Off Status Banner (Sabtu / Minggu / Hari Lain yang Dinonaktifkan) */}
-      {isSelectedDayDisabled && (
+      {/* Holiday / Day-Off Status Banner (Senin-Minggu atau Rentang Tanggal Liburan) */}
+      {isEffectiveDayOff && (
         <div className="bg-rose-50 border border-rose-200 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
           <div className="flex items-start gap-3">
             <div className="w-9 h-9 rounded-xl bg-rose-100 text-rose-600 flex items-center justify-center shrink-0 border border-rose-200">
@@ -246,14 +256,16 @@ export const ScheduleList: React.FC<ScheduleListProps> = ({
             </div>
             <div>
               <h4 className="text-xs sm:text-sm font-black text-rose-900">
-                Hari {getIndonesianDayName(selectedDay)} Sedang DINONAKTIFKAN (Mode Libur)
+                {isSelectedDayDisabled
+                  ? `Hari ${getIndonesianDayName(selectedDay)} Sedang DINONAKTIFKAN (Mode Libur)`
+                  : `Hari Ini Masuk Rentang Libur: ${todayHolidayStatus?.label || 'Libur Sekolah'}`}
               </h4>
               <p className="text-xs text-rose-700 mt-0.5">
-                Seluruh bunyi Bel Sekolah &amp; Murottal Otomatis tidak akan berputar pada hari {getIndonesianDayName(selectedDay)} walaupun komputer tetap menyala.
+                Seluruh bunyi Bel Sekolah, Murottal (otomatis/manual), &amp; rekaman tambahan setelah bel pulang tidak aktif pada hari {getIndonesianDayName(selectedDay)}.
               </p>
             </div>
           </div>
-          {onToggleDisabledDay && (
+          {isSelectedDayDisabled && onToggleDisabledDay && (
             <button
               type="button"
               onClick={() => onToggleDisabledDay(selectedDay)}
@@ -455,12 +467,22 @@ export const ScheduleList: React.FC<ScheduleListProps> = ({
                 <div className="flex flex-wrap items-center gap-2 w-full md:w-auto justify-end pt-2 md:pt-0 border-t md:border-0 border-slate-100">
                   {/* Test Play Sound */}
                   <button
+                    type="button"
+                    disabled={isEffectiveDayOff}
                     onClick={() => onTestScheduleItem(item)}
-                    className="bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all active:scale-95 cursor-pointer"
-                    title="Uji Bunyi Nada & Speech Ucapan"
+                    className={`px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all border ${
+                      isEffectiveDayOff
+                        ? 'bg-rose-50 text-rose-400 border-rose-200 cursor-not-allowed opacity-75'
+                        : 'bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-200 active:scale-95 cursor-pointer'
+                    }`}
+                    title={
+                      isEffectiveDayOff
+                        ? `Hari ${getIndonesianDayName(selectedDay)} sedang di-Off-kan (Mode Libur)`
+                        : 'Uji Bunyi Nada & Speech Ucapan'
+                    }
                   >
                     <Play className="w-3.5 h-3.5 fill-current" />
-                    <span>Tes Bunyi</span>
+                    <span>{isEffectiveDayOff ? 'Libur (Off)' : 'Tes Bunyi'}</span>
                   </button>
 
                   {/* Neat Pause & Stop Controls beside Tes Bunyi when this schedule is playing */}

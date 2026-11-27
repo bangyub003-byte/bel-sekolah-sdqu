@@ -8,7 +8,9 @@ import {
   ChimeType,
   MurottalConfig,
   MurottalTrack,
+  HolidayPeriod,
 } from './types';
+import { evaluateDateHolidayStatus } from './utils/holidayUtils';
 import { INITIAL_SCHEDULES, DEFAULT_GLOBAL_PREFIX } from './data/defaultSchedule';
 import { DEFAULT_ASAS_SCHEDULES } from './data/asasSchedule';
 import { DEFAULT_MUROTTAL_CONFIG, DEFAULT_JUZ_30_TRACKS } from './data/defaultMurottal';
@@ -918,10 +920,9 @@ export default function App() {
       const dateKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
       const currentHHMM = format24HourTime(now, false); // HH:MM
       const dayNum = getDayOfWeekNumber(now) as DayOfWeek;
-      const disabledDays = currentSettings.disabledDays ?? [0];
-      const isTodayDisabled = disabledDays.includes(dayNum);
+      const isTodayDisabled = evaluateDateHolidayStatus(now, currentSettings).isOff;
 
-      // If today (e.g. Sabtu or Minggu) is disabled, DO NOT trigger Murottal or Bells even if PC stays on
+      // If today is disabled (per-day Senin-Minggu or holiday date range), DO NOT trigger Murottal or Bells even if PC stays on
       if (!isTodayDisabled) {
         // 1. Check Automatic Murottal Trigger (Set-based per-date-minute deduplication)
         const slotsToEvaluate =
@@ -1178,6 +1179,10 @@ export default function App() {
     track: MurottalTrack,
     options?: MurottalPlaybackOptions
   ) => {
+    if (evaluateDateHolidayStatus(getSynchronizedDate(), audioSettingsRef.current).isOff) {
+      handleStopMurottal();
+      return;
+    }
     isMurottalStartingRef.current = true;
     try {
       clearMurottalFade();
@@ -1444,6 +1449,10 @@ export default function App() {
   };
 
   const handleResumeMurottal = () => {
+    if (evaluateDateHolidayStatus(getSynchronizedDate(), audioSettingsRef.current).isOff) {
+      handleStopMurottal();
+      return;
+    }
     clearMurottalFade();
     fadeTargetBellKeyRef.current = null;
     if (murottalAudioRef.current) {
@@ -1471,6 +1480,9 @@ export default function App() {
 
   // Trigger Automatic Bell
   const triggerAutomaticBell = async (item: ScheduleItem, dayNum: DayOfWeek) => {
+    if (evaluateDateHolidayStatus(getSynchronizedDate(), audioSettingsRef.current).isOff) {
+      return;
+    }
     // If murottal is still fading or playing when the bell triggers, let it fade smoothly to silence first
     if (murottalConfigRef.current.autoStopOnBell !== false) {
       if (isFadingMurottalRef.current) {
@@ -1522,6 +1534,7 @@ export default function App() {
           label: `${item.time} - ${item.label}`,
           scheduleId: item.id,
           scheduleTime: item.time,
+          spokenTime: format24HourTime(getSynchronizedDate(), false),
           ...(dismissalTargets
             ? {
                 fallbackMatchScheduleIds: dismissalTargets.matchIds,
@@ -1538,7 +1551,7 @@ export default function App() {
   triggerAutomaticBellRef.current = triggerAutomaticBell;
   handlePlayMurottalTrackRef.current = handlePlayMurottalTrack;
 
-  // Global Day Mute/Off Toggle (specifically for disabling Saturday / Sunday Bells + Murottal)
+  // Global Day Mute/Off Toggle (supports all days Senin - Minggu for Bells, Murottal, & Post-Bell Tracks)
   const disabledDays = audioSettings.disabledDays ?? [0];
   const handleToggleDisabledDay = (day: DayOfWeek) => {
     setAudioSettings((prev) => {
@@ -1551,6 +1564,24 @@ export default function App() {
       };
     });
   };
+
+  const handleUpdateHolidayPeriods = (periods: HolidayPeriod[]) => {
+    setAudioSettings((prev) => ({
+      ...prev,
+      holidayPeriods: periods,
+    }));
+  };
+
+  // Immediately stop active bells, post-bell recordings, and Murottal if today transitions into Off / Holiday Mode
+  useEffect(() => {
+    const status = evaluateDateHolidayStatus(getSynchronizedDate(), audioSettings);
+    if (status.isOff) {
+      stopAllBellAudio();
+      if (murottalAudioRef.current && !murottalAudioRef.current.paused) {
+        handleStopMurottal();
+      }
+    }
+  }, [audioSettings.disabledDays, audioSettings.holidayPeriods, todayDayNum]);
 
   const fridayEarlyTime = getFridayEarlyDismissalTime(audioSettings);
   const handleToggleFridayExtraOff = () => {
@@ -1630,7 +1661,8 @@ export default function App() {
     currentTime.getMinutes() * 60 +
     currentTime.getSeconds();
 
-  const isTodayGloballyDisabled = disabledDays.includes(todayDayNum);
+  const todayHolidayStatus = evaluateDateHolidayStatus(currentTime, audioSettings);
+  const isTodayGloballyDisabled = todayHolidayStatus.isOff;
   const todayActiveSchedules = isTodayGloballyDisabled
     ? []
     : getEffectiveDaySchedules(schedules, todayDayNum, audioSettings);
@@ -1648,17 +1680,13 @@ export default function App() {
 
   // Current or most recent scheduled bell earlier today (for quick manual replay button near clock/date)
   let latestScheduleItem: ScheduleItem | null = null;
-  const todayScheduledSorted = getEffectiveDaySchedules(
-    schedules,
-    todayDayNum,
-    audioSettings
-  );
-
-  for (const item of todayScheduledSorted) {
-    const [hStr, mStr] = item.time.split(':');
-    const targetSecsTotal = parseInt(hStr, 10) * 3600 + parseInt(mStr, 10) * 60;
-    if (targetSecsTotal <= currentSecsTotal) {
-      latestScheduleItem = item;
+  if (!isTodayGloballyDisabled) {
+    for (const item of todayActiveSchedules) {
+      const [hStr, mStr] = item.time.split(':');
+      const targetSecsTotal = parseInt(hStr, 10) * 3600 + parseInt(mStr, 10) * 60;
+      if (targetSecsTotal <= currentSecsTotal) {
+        latestScheduleItem = item;
+      }
     }
   }
 
@@ -1683,15 +1711,27 @@ export default function App() {
     };
     setBellLogs((prev) => [newLog, ...prev.slice(0, 99)]);
 
+    const liveHHMM = format24HourTime(getSynchronizedDate(), false);
     await playBellSequence('westminster', testText, audioSettings, 1.0, undefined, 'tts', undefined, undefined, undefined, undefined, undefined, 'id', 'auto_translate', undefined, {
       label: 'Tes Bell Seketika',
-      scheduleTime: format24HourTime(currentTime, false),
+      scheduleTime: liveHHMM,
+      spokenTime: liveHHMM,
       skipPostBellTracks: true,
     });
   };
 
   // Test Row Schedule Item
   const handleTestScheduleItem = async (item: ScheduleItem) => {
+    const currentDisabled = audioSettingsRef.current.disabledDays ?? [0];
+    const isSelectedDayOff = currentDisabled.includes(selectedDay);
+    const isTodayHolidayOff = evaluateDateHolidayStatus(
+      getSynchronizedDate(),
+      audioSettingsRef.current
+    ).isOff;
+    if (isSelectedDayOff || (selectedDay === todayDayNum && isTodayHolidayOff)) {
+      return;
+    }
+
     if (murottalConfigRef.current.autoStopOnBell !== false && murottalAudioRef.current && !murottalAudioRef.current.paused) {
       await fadeOutAndStopMurottal(1800);
     }
@@ -1736,6 +1776,7 @@ export default function App() {
         label: `${item.time} - ${item.label}`,
         scheduleId: item.id,
         scheduleTime: item.time,
+        spokenTime: format24HourTime(getSynchronizedDate(), false),
         ...(dismissalTargets
           ? {
               fallbackMatchScheduleIds: dismissalTargets.matchIds,
@@ -1747,6 +1788,14 @@ export default function App() {
   };
 
   const handleTriggerFridayEarlyDismissalNow = () => {
+    const currentDisabled = audioSettingsRef.current.disabledDays ?? [0];
+    if (
+      currentDisabled.includes(5) ||
+      (todayDayNum === 5 &&
+        evaluateDateHolidayStatus(getSynchronizedDate(), audioSettingsRef.current).isOff)
+    ) {
+      return;
+    }
     const earlyItem = buildFridayEarlyDismissalSchedule(schedules, audioSettings);
     void handleTestScheduleItem(earlyItem);
   };
@@ -1981,6 +2030,9 @@ export default function App() {
             onTriggerScheduleBell={handleTestScheduleItem}
             disabledDays={disabledDays}
             onToggleDisabledDay={handleToggleDisabledDay}
+            holidayPeriods={audioSettings.holidayPeriods || []}
+            onUpdateHolidayPeriods={handleUpdateHolidayPeriods}
+            todayHolidayStatus={todayHolidayStatus}
             fridayExtraOff={Boolean(audioSettings.fridayExtraOff)}
             fridayEarlyDismissalTime={fridayEarlyTime}
             onToggleFridayExtraOff={handleToggleFridayExtraOff}
@@ -1996,8 +2048,10 @@ export default function App() {
               <ScheduleList
                 schedules={activeModeSchedules}
                 selectedDay={selectedDay}
+                todayDayNumber={todayDayNum}
                 audioSettings={audioSettings}
                 disabledDays={disabledDays}
+                todayHolidayStatus={todayHolidayStatus}
                 onToggleDisabledDay={handleToggleDisabledDay}
                 onTestScheduleItem={handleTestScheduleItem}
                 onEditScheduleItem={(item) => {
@@ -2060,6 +2114,7 @@ export default function App() {
             isAudioUnlocked={isAudioUnlocked}
             onUnlockAudio={() => setIsAudioUnlocked(true)}
             disabledDays={disabledDays}
+            todayHolidayStatus={todayHolidayStatus}
           />
         )}
 
@@ -2068,6 +2123,7 @@ export default function App() {
             settings={audioSettings}
             onUpdateSettings={setAudioSettings}
             schedules={schedules}
+            todayHolidayStatus={todayHolidayStatus}
           />
         )}
 
@@ -2156,7 +2212,12 @@ export default function App() {
             speechLanguage || 'id',
             speechInputMode || 'auto_translate',
             translatedSpeechText,
-            scheduleTime ? { scheduleTime } : undefined
+            scheduleTime
+              ? {
+                  scheduleTime,
+                  spokenTime: format24HourTime(getSynchronizedDate(), false),
+                }
+              : undefined
           );
         }}
       />

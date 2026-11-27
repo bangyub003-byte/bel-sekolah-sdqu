@@ -23,6 +23,7 @@ import {
   togglePauseBellPlayback,
   stopAllBellAudio,
 } from '../utils/audioSynth';
+import { getSynchronizedDate, format24HourTime } from '../utils/timeSync';
 
 interface ManualBellPadProps {
   audioSettings: AudioSettings;
@@ -123,8 +124,7 @@ export const ManualBellPad: React.FC<ManualBellPadProps> = ({
 
     const fullText = `${audioSettings.globalPrefix}${preset.speechText}`;
 
-    const now = new Date();
-    const currentHHMM = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    const currentHHMM = format24HourTime(getSynchronizedDate(), false);
 
     try {
       await playBellSequence(
@@ -142,7 +142,12 @@ export const ManualBellPad: React.FC<ManualBellPadProps> = ({
         'id',
         'auto_translate',
         undefined,
-        { label: preset.title, scheduleTime: currentHHMM, skipPostBellTracks: true }
+        {
+          label: preset.title,
+          scheduleTime: currentHHMM,
+          spokenTime: currentHHMM,
+          skipPostBellTracks: true,
+        }
       );
       onLogManualBell(`Bel Manual: ${preset.title}`, fullText);
     } catch (err) {
@@ -189,8 +194,7 @@ export const ManualBellPad: React.FC<ManualBellPadProps> = ({
         }
       }
 
-      const now = new Date();
-      const currentHHMM = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+      const currentHHMM = format24HourTime(getSynchronizedDate(), false);
 
       await playBellSequence(
         customChime,
@@ -210,6 +214,7 @@ export const ManualBellPad: React.FC<ManualBellPadProps> = ({
         {
           label: `Siaran Manual (${customLanguage.toUpperCase()})`,
           scheduleTime: currentHHMM,
+          spokenTime: currentHHMM,
           skipPostBellTracks: true,
         }
       );
