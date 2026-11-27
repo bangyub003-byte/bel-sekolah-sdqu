@@ -1534,7 +1534,6 @@ export default function App() {
           label: `${item.time} - ${item.label}`,
           scheduleId: item.id,
           scheduleTime: item.time,
-          spokenTime: format24HourTime(getSynchronizedDate(), false),
           ...(dismissalTargets
             ? {
                 fallbackMatchScheduleIds: dismissalTargets.matchIds,
@@ -1776,7 +1775,6 @@ export default function App() {
         label: `${item.time} - ${item.label}`,
         scheduleId: item.id,
         scheduleTime: item.time,
-        spokenTime: format24HourTime(getSynchronizedDate(), false),
         ...(dismissalTargets
           ? {
               fallbackMatchScheduleIds: dismissalTargets.matchIds,
@@ -2212,12 +2210,7 @@ export default function App() {
             speechLanguage || 'id',
             speechInputMode || 'auto_translate',
             translatedSpeechText,
-            scheduleTime
-              ? {
-                  scheduleTime,
-                  spokenTime: format24HourTime(getSynchronizedDate(), false),
-                }
-              : undefined
+            scheduleTime ? { scheduleTime } : undefined
           );
         }}
       />

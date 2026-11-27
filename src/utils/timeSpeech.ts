@@ -249,6 +249,22 @@ export function formatSpokenTime(hhmm?: string, language: SpeechLanguage = 'id')
 }
 
 /**
+ * Combines fixed schedule spoken time + announcement body into one unified string
+ * so offline pre-caching and live playback generate the exact same CacheStorage key.
+ */
+export function buildAnnouncementWithTime(
+  hhmm: string | undefined,
+  language: SpeechLanguage,
+  announcementText: string
+): string {
+  const timePart = formatSpokenTime(hhmm, language).trim();
+  const bodyPart = (announcementText || '').trim();
+  if (!timePart) return bodyPart;
+  if (!bodyPart) return timePart;
+  return `${timePart} ${bodyPart}`;
+}
+
+/**
  * Resolves whether and with which AI voice the current-time announcement should be spoken.
  * Shared between playBellSequence() and offline pre-caching so cache keys match 100%.
  */

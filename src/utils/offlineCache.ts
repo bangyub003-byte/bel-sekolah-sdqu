@@ -4,6 +4,7 @@ import { DEFAULT_ASAS_SCHEDULES } from '../data/asasSchedule';
 import { buildFridayEarlyDismissalSchedule } from './fridaySchedule';
 import { getCustomMurottalTracks } from './murottalStorage';
 import {
+  buildAnnouncementWithTime,
   formatSpokenTime,
   resolveTimeAnnouncementConfig,
 } from './timeSpeech';
@@ -787,6 +788,7 @@ export interface ScheduleTtsTarget {
   label: string;
   voiceName: string;
   language: SpeechLanguage;
+  timeHHMM?: string;
   sourceText: string;
   resolvedText: string | null; // null only when multilingual auto_translate has not been translated yet
   needsTranslation: boolean;
@@ -815,82 +817,83 @@ export function collectScheduleTtsTargets(
   for (const item of allItems) {
     const audioType = item.audioType || 'tts';
     const speechLanguage: SpeechLanguage = item.speechLanguage || 'id';
-
-    // Collect current-time announcement matching each schedule's language ('id', 'ar', 'en', 'jv')
-    const spokenTimeText = formatSpokenTime(item.time, speechLanguage);
-    const timeConfig = resolveTimeAnnouncementConfig(
-      audioType,
-      speechLanguage,
-      audioSettings,
-      item.clonedVoiceId
-    );
-    if (spokenTimeText && timeConfig.shouldAnnounceTime) {
-      const timeCacheKeyUrl = buildTtsCacheKeyUrl(
-        timeConfig.voiceName,
-        speechLanguage,
-        spokenTimeText
-      );
-      if (!dedupeMap.has(timeCacheKeyUrl)) {
-        dedupeMap.set(timeCacheKeyUrl, {
-          label: `Jam ${item.time} (${speechLanguage.toUpperCase()})`,
-          voiceName: timeConfig.voiceName,
-          language: speechLanguage,
-          sourceText: spokenTimeText,
-          resolvedText: spokenTimeText,
-          needsTranslation: false,
-          cacheKeyUrl: timeCacheKeyUrl,
-        });
-      }
-    }
-
-    if (audioType === 'recording') continue;
-
     const useMultilingualAi = speechLanguage !== 'id';
     const useStandardMaleAi = audioType === 'tts' && audioSettings.enableTTS !== false;
     const shouldGenerateAiAudio = audioType === 'cloned' || useMultilingualAi || useStandardMaleAi;
-    if (!shouldGenerateAiAudio) continue;
 
     const targetVoiceId =
       item.clonedVoiceId ||
       (audioSettings.useClonedVoice ? audioSettings.activeClonedVoiceId : undefined);
     const activeProfile = audioSettings.clonedProfiles?.find((p) => p.id === targetVoiceId);
 
-    if (
+    const isDirectRecordingProfile =
       audioType === 'cloned' &&
       !useMultilingualAi &&
       activeProfile?.playbackMode === 'direct_recording' &&
-      activeProfile.sampleAudioUrl
-    ) {
+      Boolean(activeProfile.sampleAudioUrl);
+
+    const sourceText = `${prefix}${item.speechText || ''}`.trim();
+    const directOrInlineTranslated = item.translatedSpeechText?.trim() || '';
+
+    // Standalone time clip is only needed when main body is a direct recording/MP3 or empty
+    if (audioType === 'recording' || isDirectRecordingProfile || (!sourceText && !directOrInlineTranslated)) {
+      const spokenTimeText = formatSpokenTime(item.time, speechLanguage);
+      const timeConfig = resolveTimeAnnouncementConfig(
+        audioType,
+        speechLanguage,
+        audioSettings,
+        item.clonedVoiceId
+      );
+      if (spokenTimeText && timeConfig.shouldAnnounceTime) {
+        const timeCacheKeyUrl = buildTtsCacheKeyUrl(
+          timeConfig.voiceName,
+          speechLanguage,
+          spokenTimeText
+        );
+        if (!dedupeMap.has(timeCacheKeyUrl)) {
+          dedupeMap.set(timeCacheKeyUrl, {
+            label: `Jam ${item.time} (${speechLanguage.toUpperCase()})`,
+            voiceName: timeConfig.voiceName,
+            language: speechLanguage,
+            timeHHMM: item.time,
+            sourceText: spokenTimeText,
+            resolvedText: spokenTimeText,
+            needsTranslation: false,
+            cacheKeyUrl: timeCacheKeyUrl,
+          });
+        }
+      }
       continue;
     }
+
+    if (!shouldGenerateAiAudio) continue;
 
     const voiceName =
       audioType === 'tts'
         ? 'Fenrir'
         : activeProfile?.prebuiltVoiceFallback || (targetVoiceId === 'Puck' ? 'Puck' : 'Fenrir');
 
-    const sourceText = `${prefix}${item.speechText || ''}`.trim();
-    const directOrInlineTranslated = item.translatedSpeechText?.trim() || '';
-
-    if (!sourceText && !directOrInlineTranslated) continue;
-
-    let resolvedText: string | null = null;
+    let resolvedActivityText: string | null = null;
     let needsTranslation = false;
 
     if (!useMultilingualAi) {
-      resolvedText = sourceText;
+      resolvedActivityText = sourceText;
     } else if (item.speechInputMode === 'direct_text') {
-      resolvedText = directOrInlineTranslated || sourceText;
+      resolvedActivityText = directOrInlineTranslated || sourceText;
     } else if (directOrInlineTranslated) {
-      resolvedText = directOrInlineTranslated;
+      resolvedActivityText = directOrInlineTranslated;
     } else {
       const cachedTrans = getTranslationOffline(speechLanguage, sourceText);
       if (cachedTrans) {
-        resolvedText = cachedTrans;
+        resolvedActivityText = cachedTrans;
       } else {
         needsTranslation = true;
       }
     }
+
+    const resolvedText = resolvedActivityText
+      ? buildAnnouncementWithTime(item.time, speechLanguage, resolvedActivityText)
+      : null;
 
     const cacheKeyUrl = resolvedText
       ? buildTtsCacheKeyUrl(voiceName, speechLanguage, resolvedText)
@@ -898,13 +901,14 @@ export function collectScheduleTtsTargets(
 
     const dedupeKey = cacheKeyUrl
       ? cacheKeyUrl
-      : `pending:${voiceName}:${speechLanguage}:${sourceText}`;
+      : `pending:${voiceName}:${speechLanguage}:${item.time}:${sourceText}`;
 
     if (!dedupeMap.has(dedupeKey)) {
       dedupeMap.set(dedupeKey, {
         label: `${item.time} - ${item.label}`,
         voiceName,
         language: speechLanguage,
+        timeHHMM: item.time,
         sourceText,
         resolvedText,
         needsTranslation,
@@ -1259,7 +1263,9 @@ export async function cacheAllAppAudioForOffline(
         i--;
         continue;
       }
-      textToSpeak = transRes.text;
+      textToSpeak = transRes.text
+        ? buildAnnouncementWithTime(target.timeHHMM, target.language, transRes.text)
+        : null;
       if (transRes.calledApi) {
         await sleep(800);
       }

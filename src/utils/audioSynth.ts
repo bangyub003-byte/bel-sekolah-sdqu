@@ -13,6 +13,7 @@ import {
   saveTranslationOffline,
 } from './offlineCache';
 import {
+  buildAnnouncementWithTime,
   formatSpokenTime,
   resolveTimeAnnouncementConfig,
 } from './timeSpeech';
@@ -1117,14 +1118,27 @@ export async function playBellSequence(
     const useStandardMaleAi = audioType === 'tts' && settings.enableTTS !== false;
     const shouldGenerateAiAudio = audioType === 'cloned' || useMultilingualAi || useStandardMaleAi;
 
-    const realTimeHHMM =
-      options?.spokenTime || format24HourTime(getSynchronizedDate(), false);
-    const shouldAnnounceCurrentTime =
-      !options?.skipTimeAnnouncement &&
-      Boolean(options?.spokenTime || options?.scheduleTime);
-    const timeAnnouncementText = shouldAnnounceCurrentTime
-      ? formatSpokenTime(realTimeHHMM, speechLanguage)
-      : '';
+    const isDirectRecordingProfile =
+      audioType === 'cloned' &&
+      !useMultilingualAi &&
+      activeProfile?.playbackMode === 'direct_recording' &&
+      Boolean(activeProfile.sampleAudioUrl);
+
+    const scheduleTimeHHMM = !options?.skipTimeAnnouncement
+      ? options?.spokenTime || options?.scheduleTime
+      : undefined;
+
+    const shouldCombineTimeIntoAiSpeech =
+      shouldGenerateAiAudio &&
+      audioType !== 'recording' &&
+      !isDirectRecordingProfile &&
+      Boolean(scheduleTimeHHMM) &&
+      fullText.trim().length > 0;
+
+    const timeAnnouncementText =
+      !shouldCombineTimeIntoAiSpeech && scheduleTimeHHMM
+        ? formatSpokenTime(scheduleTimeHHMM, speechLanguage)
+        : '';
     const timeAnnouncementConfig = resolveTimeAnnouncementConfig(
       audioType,
       speechLanguage,
@@ -1132,53 +1146,60 @@ export async function playBellSequence(
       clonedVoiceId
     );
 
-    // Resolve final spoken text and prefetch AI audio CONCURRENTLY while the intro chime rings
+    // Resolve final spoken text (including fixed schedule time) and prefetch AI audio CONCURRENTLY while the intro chime rings
     let resolvedSpokenText = fullText;
     const prepareTextAndAudioPromise = (async (): Promise<{
       spokenText: string;
       aiAudioUrl: string | null;
     }> => {
-      let textToSpeak = fullText;
+      let activityText = fullText.trim();
 
       if (useMultilingualAi) {
         if (speechInputMode === 'direct_text') {
-          textToSpeak = translatedSpeechText?.trim() || fullText;
+          activityText = translatedSpeechText?.trim() || fullText.trim();
         } else {
           if (translatedSpeechText && translatedSpeechText.trim()) {
-            textToSpeak = translatedSpeechText.trim();
+            activityText = translatedSpeechText.trim();
           } else if (fullText.trim()) {
             const translated = await translateSpeechWithAI(fullText, speechLanguage);
             if (translated) {
-              textToSpeak = translated;
+              activityText = translated.trim();
             }
           }
         }
       }
+
+      const textToSpeak = shouldCombineTimeIntoAiSpeech
+        ? buildAnnouncementWithTime(scheduleTimeHHMM, speechLanguage, activityText)
+        : activityText;
 
       resolvedSpokenText = textToSpeak;
 
       if (
         shouldGenerateAiAudio &&
         textToSpeak.trim().length > 0 &&
-        !(
-          audioType === 'cloned' &&
-          !useMultilingualAi &&
-          activeProfile?.playbackMode === 'direct_recording' &&
-          activeProfile.sampleAudioUrl
-        )
+        !isDirectRecordingProfile
       ) {
         const voiceFallback =
           audioType === 'tts'
             ? 'Fenrir'
             : activeProfile?.prebuiltVoiceFallback || (targetVoiceId === 'Puck' ? 'Puck' : 'Fenrir');
 
-        const audioUrl = await generateClonedTTSAudio(
+        let audioUrl = await generateClonedTTSAudio(
           textToSpeak,
           undefined,
           voiceFallback,
           audioType === 'tts' ? 'Suara Pria AI' : activeProfile?.name,
           speechLanguage
         );
+
+        // Extra offline safeguard: if cloned voice cache missed, check primary male 'Fenrir' cache before falling back
+        if (!audioUrl && voiceFallback !== 'Fenrir') {
+          audioUrl = await getDataUrlAudioFromOfflineCache(
+            buildTtsCacheKeyUrl('Fenrir', speechLanguage, textToSpeak)
+          );
+        }
+
         return { spokenText: textToSpeak, aiAudioUrl: audioUrl };
       }
 
@@ -1223,7 +1244,7 @@ export async function playBellSequence(
 
     setBellPlaybackState({ phase: 'speech' });
 
-    // Announce current schedule time first ("Sekarang pukul ...") before reading the main announcement text
+    // Standalone time announcement only needed for recording / direct_recording / empty body
     if (timeAnnouncementText && timeAnnouncementConfig.shouldAnnounceTime) {
       let timePlayed = false;
       if (preparedTimeAudioUrl) {
